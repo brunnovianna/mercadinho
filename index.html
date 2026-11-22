@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="color-scheme" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mercadinho do Brunno</title>
+<title>Mercadinho do Olympia</title>
 <meta name="description" content="Produtos de limpeza com entrega. Peça pelo WhatsApp.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Mercadinho do Brunno">
+<meta property="og:title" content="Mercadinho do Olympia">
 <meta property="og:description" content="Produtos de limpeza com entrega. Peça pelo WhatsApp.">
 <meta property="og:url" content="https://brunnovianna.github.io/mercadinho/">
 <meta property="og:image" content="https://brunnovianna.github.io/mercadinho/og.jpg">
@@ -134,7 +134,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 <body>
 <div class="wrap">
   <header class="top">
-    <h1>Mercadinho do Brunno</h1>
+    <h1>Mercadinho do Olympia</h1>
     <p class="updated">Preços atualizados em 22/11/2026</p>
   </header>
   <ul class="list" id="list"></ul>
@@ -251,7 +251,7 @@ function change(p, d) {
 function orderText() {
   const blocks = LINES.filter(l => qty[l.key] > 0)
     .map(l => `${l.name}\n${l.desc}\n#${l.sku}\n${qty[l.key]} × ${brl(l.price)} = ${brl(l.price * qty[l.key])}`);
-  return `Olá, Brunno!\n\nEsse é meu pedido no Mercadinho:\n\n${blocks.join("\n\n")}\n\nTotal: ${brl(total())}`;
+  return `Olá, Brunno!\n\nEsse é meu pedido no Mercadinho do Olympia:\n\n${blocks.join("\n\n")}\n\nTotal: ${brl(total())}`;
 }
 function total() { return LINES.reduce((s, l) => s + l.price * qty[l.key], 0); }
 
