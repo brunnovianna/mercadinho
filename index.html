@@ -136,6 +136,18 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .empty { color: var(--muted); text-align: center; margin: 24px 0; }
 .item[hidden] { display: none; }
 .size strong { color: var(--ink); font-weight: 700; }
+.media { display: grid; justify-items: center; gap: 4px; align-self: center; }
+.media .sku { margin: 0; font-size: 0.625rem; color: rgba(16, 50, 74, 0.35); opacity: 1; letter-spacing: 0.05em; }
+.qty button { width: 34px; height: 34px; font-size: 1.1rem; border-radius: 9px; }
+.qty .trash { background: #fde2e8; color: #d1253f; display: grid; place-items: center; }
+.qty .trash:hover { background: #fbcfd9; }
+.qty .trash[hidden] { display: none; }
+@media (max-width: 520px) {
+  .row { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+.clear { background: none; border: 0; padding: 0; margin-left: 8px; color: #cfe0ea; font: 500 0.75rem var(--body); text-decoration: underline; cursor: pointer; }
+.total small { white-space: nowrap; }
+@media (max-width: 380px) { .cta { padding: 12px 14px; font-size: 0.9375rem; } .total strong { font-size: 1.3rem; } }
 </style>
 </head>
 <body>
@@ -154,7 +166,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 </div>
 <div class="bar">
   <div class="wrap">
-    <div class="total"><small>Total</small><strong id="total">R$ 0,00</strong><div class="toast" id="toast" aria-live="polite"></div></div>
+    <div class="total"><small>Total <button type="button" class="clear" id="clear">Limpar carrinho</button></small><strong id="total">R$ 0,00</strong><div class="toast" id="toast" aria-live="polite"></div></div>
     <a class="cta" id="cta" href="#" aria-disabled="true">Pedir pelo WhatsApp</a>
   </div>
 </div>
@@ -225,23 +237,28 @@ PRODUCTS.forEach(p => {
       </div>
       <p class="picked" id="picked-${p.id}"></p>` : "";
   li.innerHTML = `
-    <img class="thumb" id="img-${p.id}" src="${img}" alt="${p.name} ${sizeText}">
+    <div class="media">
+      <img class="thumb" id="img-${p.id}" src="${img}" alt="${p.name} ${sizeText}">
+      <p class="sku" id="sku-${p.id}">#${skuText}</p>
+    </div>
     <div>
       <p class="name">${p.name}</p>
       <p class="size" id="size-${p.id}">${(!v && p.sizeHtml) ? p.sizeHtml : sizeText}</p>
-      <p class="sku" id="sku-${p.id}">#${skuText}</p>${p.soldOut ? '<p class="out">Fora de estoque</p>' : ""}${chips}
+      ${p.soldOut ? '<p class="out">Fora de estoque</p>' : ""}${chips}
       <div class="row">
         <p class="price">${brl(p.price)}</p>
         <div class="qty">
           <button type="button" id="minus-${p.id}" aria-label="Remover um ${p.name}">−</button>
           <output id="q-${p.id}" aria-live="polite">0</output>
           <button type="button" id="plus-${p.id}" aria-label="Adicionar um ${p.name}"${p.soldOut ? " disabled" : ""}>+</button>
+          <button type="button" class="trash" id="trash-${p.id}" aria-label="Remover ${p.name} do pedido" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9zm4 2v8h2v-8h-2zm4 0v8h2v-8h-2z"/></svg></button>
         </div>
       </div>
     </div>`;
   list.appendChild(li);
   li.querySelector(`#minus-${p.id}`).addEventListener("click", () => change(p, -1));
   li.querySelector(`#plus-${p.id}`).addEventListener("click", () => change(p, 1));
+  li.querySelector(`#trash-${p.id}`).addEventListener("click", () => change(p, -qty[currentKey(p)]));
   if (p.variants) p.variants.forEach(o =>
     li.querySelector(`#chip-${p.id}-${o.key}`).addEventListener("click", () => pick(p, o.key)));
 });
@@ -255,12 +272,14 @@ function pick(p, key) {
   document.getElementById(`size-${p.id}`).textContent = `${p.size} · ${v.label}`;
   document.getElementById(`sku-${p.id}`).textContent = `#${v.sku}`;
   document.getElementById(`q-${p.id}`).textContent = qty[currentKey(p)];
+  document.getElementById(`trash-${p.id}`).hidden = qty[currentKey(p)] < 1;
 }
 
 function change(p, d) {
   const k = currentKey(p);
   qty[k] = Math.max(0, qty[k] + d);
   document.getElementById(`q-${p.id}`).textContent = qty[k];
+  document.getElementById(`trash-${p.id}`).hidden = qty[k] < 1;
   if (p.variants) {
     const picked = p.variants.filter(o => qty[`${p.id}-${o.key}`] > 0).map(o => `${qty[`${p.id}-${o.key}`]} ${o.label}`);
     document.getElementById(`picked-${p.id}`).textContent = picked.length ? `No pedido: ${picked.join(", ")}` : "";
@@ -279,6 +298,7 @@ const cta = document.getElementById("cta");
 const toast = document.getElementById("toast");
 function render() {
   const t = total();
+  document.getElementById("clear").style.visibility = t > 0 ? "visible" : "hidden";
   document.getElementById("total").textContent = brl(t);
   cta.setAttribute("aria-disabled", t > 0 ? "false" : "true");
   if (WHATSAPP) {
@@ -295,6 +315,16 @@ cta.addEventListener("click", async e => {
   e.preventDefault();
   try { await navigator.clipboard.writeText(orderText()); toast.textContent = "Pedido copiado. Cole no WhatsApp."; }
   catch { toast.textContent = "Não foi possível copiar."; }
+});
+
+document.getElementById("clear").addEventListener("click", () => {
+  LINES.forEach(l => { qty[l.key] = 0; });
+  PRODUCTS.forEach(p => {
+    document.getElementById(`q-${p.id}`).textContent = 0;
+    document.getElementById(`trash-${p.id}`).hidden = true;
+    const pk = document.getElementById(`picked-${p.id}`); if (pk) pk.textContent = "";
+  });
+  render();
 });
 
 const busca = document.getElementById("busca");
