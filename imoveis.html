@@ -208,6 +208,10 @@ const DEFAULT_W = {
 /* ---------- estado ---------- */
 const KEY = 'cacaApe.v1';
 let S = load();
+// numeração sempre 1..n, na ordem em que os imóveis foram adicionados
+function renumber(){ S.items.sort((a,b)=>a.num-b.num).forEach((it,i)=>it.num=i+1); S.nextNum = S.items.length+1; }
+function removeItem(id){ const it = S.items.find(x=>x.id===id); S.items = S.items.filter(x=>x.id!==id); renumber(); save(); renderAll(); return it; }
+renumber();
 function blank(){ return {center:null, radius:1500, items:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw){ const d = JSON.parse(raw); return Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); } }catch(e){}
@@ -631,7 +635,7 @@ function openDetail(id){
   $('#locate').onclick = () => { closeSheet(); map && map.setView([it.lat,it.lng], 17); };
   $('#del').onclick = () => {
     const b = $('#del');
-    if (b.dataset.armed){ S.items = S.items.filter(x=>x.id!==id); save(); renderAll(); closeSheet(); toast(`#${it.num} excluído`); }
+    if (b.dataset.armed){ const n = it.num; removeItem(id); closeSheet(); toast(`#${n} excluído — numeração refeita`); }
     else { b.dataset.armed = 1; b.textContent = 'Toque de novo para excluir'; }
   };
   $('#close').onclick = closeSheet;
@@ -666,7 +670,7 @@ function renderList(){
     const del = e.target.closest('[data-del]');
     if (del){
       e.stopPropagation();
-      if (del.classList.contains('armed')){ const it=S.items.find(x=>x.id===del.dataset.del); S.items = S.items.filter(x=>x.id!==del.dataset.del); save(); renderAll(); toast(`#${it.num} excluído`); }
+      if (del.classList.contains('armed')){ const n = S.items.find(x=>x.id===del.dataset.del).num; removeItem(del.dataset.del); toast(`#${n} excluído — numeração refeita`); }
       else { box.querySelectorAll('.del.armed').forEach(x=>{x.classList.remove('armed'); x.textContent='✕';}); del.classList.add('armed'); del.textContent='Excluir?'; }
       return;
     }
@@ -726,7 +730,7 @@ $('#copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(J
 $('#importFile').onchange = async e => {
   const f = e.target.files[0]; if(!f) return;
   try{ const d = JSON.parse(await f.text()); if(!Array.isArray(d.items)) throw 0;
-    S = Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
+    S = Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); renumber(); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
   }catch(err){ toast('Arquivo inválido'); }
   e.target.value='';
 };
