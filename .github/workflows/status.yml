@@ -1,1 +1,63 @@
+name: Status da loja
 
+on:
+  workflow_dispatch:
+    inputs:
+      estado:
+        description: "Estado da loja"
+        type: choice
+        options:
+          - aberto
+          - fechado
+        default: fechado
+        required: true
+      horario:
+        description: "Horário de abertura (opcional, só vale com fechado). Ex.: 18h"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Atualizar status.json
+        env:
+          ESTADO: ${{ inputs.estado }}
+          HORARIO: ${{ inputs.horario }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          estado = os.environ["ESTADO"]
+          horario = (os.environ.get("HORARIO") or "").strip()
+          data = {"estado": estado}
+          if estado == "fechado" and horario:
+              data["abre"] = horario
+          with open("status.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+              f.write("\n")
+          print(data)
+          PY
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898583+github-actions[bot]@users.noreply.github.com"
+          git add status.json
+          if git diff --cached --quiet; then
+            echo "Nada mudou."
+          else
+            git commit -m "Loja: ${{ inputs.estado }} ${{ inputs.horario }}"
+            git push
+          fi
+
+      - name: Republicar o GitHub Pages
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
