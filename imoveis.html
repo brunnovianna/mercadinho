@@ -143,6 +143,9 @@
       <div class="actions"><button class="btn" id="resetWeights" type="button">Restaurar padrão</button></div>
     </details>
 
+    <div class="section-title">Google Maps</div>
+    <div class="settings" id="keyBox"></div>
+
     <div class="section-title">Backup</div>
     <div class="settings">
       <div class="hint">Os dados ficam salvos neste navegador. Exporte um backup para levar para outro aparelho.</div>
@@ -259,29 +262,89 @@ function score(it){ return status(it)==='disq' ? null : breakdown(it).reduce((s,
 function maxScore(){ const W=S.W; return W.circulo+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
 function disqReason(it){ const a=it.answers||{}; return DQ.filter(d=>a[d.key]===false).map(d=>d.reason).join(' · '); }
 
-/* ---------- mapa ---------- */
-const map = L.map('map', {zoomControl:true}).setView([-23.965,-46.333], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
-let circle=null, centerMarker=null; const markers = {};
+/* ---------- mapa (Google Maps com chave; OpenStreetMap sem chave) ---------- */
+const GKEY = 'cacaApe.gkey';
+function getKey(){ try{ return localStorage.getItem(GKEY)||''; }catch(e){ return ''; } }
 const COLORS = {done:'#2f6f5e', partial:'#a8731a', pending:'#8a8983', disq:'#b4442f'};
+let map = null, mapError = '';
+const htmlEl = h => { const d=document.createElement('div'); d.innerHTML=h; return d.firstElementChild; };
+const pinHtml = it => `<div class="pin" style="background:${COLORS[status(it)]}"><span>${it.num}</span></div>`;
 
+function loadGoogle(key){
+  return new Promise((res, rej) => {
+    window.__gmInit = () => res();
+    window.gm_authFailure = () => { mapError = 'O Google recusou a chave (verifique se a Maps JavaScript API está ativa e se o domínio está liberado).'; renderBanner(); renderKeyBox(); };
+    const s = document.createElement('script');
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&libraries=marker,geocoding&language=pt-BR&region=BR&callback=__gmInit`;
+    s.async = true; s.onerror = () => rej(new Error('script do Google não carregou'));
+    document.head.appendChild(s);
+    setTimeout(() => rej(new Error('tempo esgotado carregando o Google')), 15000);
+  });
+}
+async function googleAdapter(){
+  const {Map, Circle} = await google.maps.importLibrary('maps');
+  const {AdvancedMarkerElement} = await google.maps.importLibrary('marker');
+  const g = new Map(document.getElementById('map'), {center:{lat:-23.965,lng:-46.333}, zoom:13, mapId:'DEMO_MAP_ID',
+    gestureHandling:'greedy', clickableIcons:false, streetViewControl:false, mapTypeControl:false, fullscreenControl:false});
+  const ll = p => typeof p.lat === 'function' ? {lat:p.lat(), lng:p.lng()} : {lat:p.lat, lng:p.lng};
+  let circle = null, center = null, markers = [];
+  return {
+    kind:'google',
+    setView([lat,lng], z){ g.setCenter({lat,lng}); if (z) g.setZoom(z); },
+    getZoom(){ return g.getZoom(); },
+    onClick(fn){ g.addListener('click', e => e.latLng && fn(e.latLng.lat(), e.latLng.lng())); },
+    fitPoints(pts){ if (!pts.length) return; if (pts.length===1) return this.setView(pts[0], 15);
+      const b = new google.maps.LatLngBounds(); pts.forEach(p => b.extend({lat:p[0], lng:p[1]})); g.fitBounds(b, 40); },
+    setCircle(c, r, onDrag){
+      if (circle){ circle.setMap(null); circle = null; } if (center){ center.map = null; center = null; }
+      if (!c) return;
+      circle = new Circle({map:g, center:{lat:c.lat,lng:c.lng}, radius:r, strokeColor:'#2f6f5e', strokeWeight:2, fillColor:'#2f6f5e', fillOpacity:.1, clickable:false});
+      center = new AdvancedMarkerElement({map:g, position:{lat:c.lat,lng:c.lng}, content:htmlEl('<div class="center-dot" style="transform:translateY(50%)"></div>'), gmpDraggable:true});
+      center.addListener('dragend', () => { const p = ll(center.position); onDrag(p.lat, p.lng); });
+    },
+    setRadius(r){ if (circle) circle.setRadius(r); },
+    fitCircle(){ if (circle) g.fitBounds(circle.getBounds(), 20); },
+    setMarkers(list){
+      markers.forEach(m => m.map = null);
+      markers = list.map(o => { const m = new AdvancedMarkerElement({map:g, position:{lat:o.lat,lng:o.lng}, content:htmlEl(o.html), gmpDraggable:true});
+        m.addListener('click', o.onClick); m.addListener('dragend', () => { const p = ll(m.position); o.onDrag(p.lat, p.lng); }); return m; });
+    }
+  };
+}
+function leafletAdapter(){
+  const m = L.map('map', {zoomControl:true}).setView([-23.965,-46.333], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(m);
+  let circle = null, center = null, markers = [];
+  return {
+    kind:'osm',
+    setView(p, z){ m.setView(p, z); },
+    getZoom(){ return m.getZoom(); },
+    onClick(fn){ m.on('click', e => fn(e.latlng.lat, e.latlng.lng)); },
+    fitPoints(pts){ if (!pts.length) return; if (pts.length===1) return m.setView(pts[0], 15); m.fitBounds(pts, {padding:[30,30], maxZoom:16}); },
+    setCircle(c, r, onDrag){
+      if (circle){ m.removeLayer(circle); circle = null; } if (center){ m.removeLayer(center); center = null; }
+      if (!c) return;
+      circle = L.circle([c.lat,c.lng], {radius:r, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1, interactive:false}).addTo(m);
+      center = L.marker([c.lat,c.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(m);
+      center.on('dragend', e => { const p = e.target.getLatLng(); onDrag(p.lat, p.lng); });
+    },
+    setRadius(r){ if (circle) circle.setRadius(r); },
+    fitCircle(){ if (circle) m.fitBounds(circle.getBounds(), {padding:[20,20]}); },
+    setMarkers(list){
+      markers.forEach(x => m.removeLayer(x));
+      markers = list.map(o => { const k = L.marker([o.lat,o.lng], {draggable:true, icon:L.divIcon({className:'', html:o.html, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(m);
+        k.on('click', o.onClick); k.on('dragend', e => { const p = e.target.getLatLng(); o.onDrag(p.lat, p.lng); }); return k; });
+    }
+  };
+}
 function drawCircle(){
-  if (circle){ map.removeLayer(circle); circle=null; }
-  if (centerMarker){ map.removeLayer(centerMarker); centerMarker=null; }
-  if (!S.center) return;
-  circle = L.circle([S.center.lat,S.center.lng], {radius:S.radius, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1}).addTo(map);
-  centerMarker = L.marker([S.center.lat,S.center.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map);
-  centerMarker.on('dragend', e => { const p=e.target.getLatLng(); S.center={...S.center, lat:p.lat, lng:p.lng, label:'Centro ajustado no mapa'}; save(); drawCircle(); renderAll(); });
+  if (!map) return;
+  map.setCircle(S.center, S.radius, (lat,lng) => { S.center = {...S.center, lat, lng, label:'Centro ajustado no mapa'}; save(); drawCircle(); renderAll(); });
 }
 function drawMarkers(){
-  for (const id in markers){ map.removeLayer(markers[id]); delete markers[id]; }
-  for (const it of S.items){
-    const st = status(it);
-    const m = L.marker([it.lat,it.lng], {draggable:true, icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[st]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
-    m.on('click', () => openDetail(it.id));
-    m.on('dragend', e => { const p=e.target.getLatLng(); it.lat=p.lat; it.lng=p.lng; it.precision='ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); });
-    markers[it.id] = m;
-  }
+  if (!map) return;
+  map.setMarkers(S.items.map(it => ({lat:it.lat, lng:it.lng, html:pinHtml(it), onClick:() => openDetail(it.id),
+    onDrag:(lat,lng) => { it.lat=lat; it.lng=lng; it.precision='ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); }})));
 }
 
 /* ---------- busca ---------- */
@@ -321,6 +384,25 @@ function errMsg(e){ return e.name==='AbortError' ? 'tempo esgotado' : e.message;
 
 // Nominatim primeiro; se falhar ou vier vazio, tenta Photon. Agrupa trechos repetidos da mesma rua (um por CEP).
 async function geocode(q){
+  if (map && map.kind === 'google'){
+    try{ return await geocodeGoogle(q); }
+    catch(e){ toast('Busca do Google falhou ('+(e.code||e.message)+'). Usando OpenStreetMap.'); }
+  }
+  return geocodeOSM(q);
+}
+async function geocodeGoogle(q){
+  const {Geocoder} = await google.maps.importLibrary('geocoding');
+  let results;
+  try{ ({results} = await new Geocoder().geocode({address:q, region:'br', componentRestrictions:{country:'BR'}})); }
+  catch(e){ if (e.code === 'ZERO_RESULTS') return []; throw e; }
+  const num = parseNumber(q);
+  return results.slice(0,6).map(r => {
+    const lt = r.geometry.location_type, hasNum = r.address_components.some(c => c.types.includes('street_number'));
+    return {lat:r.geometry.location.lat(), lon:r.geometry.location.lng(), label:r.formatted_address.replace(/, (Brasil|Brazil)$/,''),
+      google:true, num, exact:hasNum, precision: hasNum && (lt==='ROOFTOP' || lt==='RANGE_INTERPOLATED') ? 'numero' : lt==='APPROXIMATE' ? 'local' : 'rua'};
+  });
+}
+async function geocodeOSM(q){
   const num = parseNumber(q), errs = [];
   let list = [];
   try{
@@ -408,31 +490,33 @@ function showResults(q, data){
   box.querySelector('[data-manual]').onclick = () => startManual(q);
 }
 async function resolveResult(d, box){
+  if (d.google) return {lat:d.lat, lon:d.lon, label:d.label, precision:d.precision, cep:null};
   let lat = d.lat, lon = d.lon, precision = d.exact ? 'numero' : (d.num ? 'rua' : 'local'), cep = null;
   if (d.num && !d.exact){
     if (box) box.innerHTML = '<div class="hint">Localizando o número '+d.num+'…</div>';
     const ref = await refineByNumber(d);
-    if (ref){ cep = ref.cep; if (ref.lat){ lat = ref.lat; lon = ref.lon; precision = 'cep'; } }
+    if (ref){ cep = ref.cep; if (ref.lat && dist({lat:ref.lat,lng:ref.lon},{lat:d.lat,lng:d.lon}) <= 1200){ lat = ref.lat; lon = ref.lon; precision = 'cep'; } }
   }
   return {lat, lon, label:d.label, precision, cep};
 }
 function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
-map.on('click', e => {
+function onMapClick(lat, lng){
+  const e = {latlng:{lat, lng}};
   if (movingId){ const it = S.items.find(x=>x.id===movingId); movingId = null; renderBanner();
     if (it){ it.lat = e.latlng.lat; it.lng = e.latlng.lng; it.precision = 'ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); }
     return; }
   if (pendingManual !== null){ const q=pendingManual; pendingManual=null; pick(q, e.latlng.lat, e.latlng.lng, q); renderBanner(); return; }
   if (mode==='center'){ pick('Ponto no mapa', e.latlng.lat, e.latlng.lng, 'Ponto marcado no mapa'); }
-});
+}
 function pick(q, lat, lng, display, extra={}){
   $('#results').innerHTML=''; $('#q').value='';
   if (mode==='center'){
     S.center = {lat, lng, label: display}; save(); drawCircle(); renderAll();
-    map.fitBounds(circle.getBounds(), {padding:[20,20]}); setMode('add'); toast('Centro do círculo definido');
+    map && map.fitCircle(); setMode('add'); toast('Centro do círculo definido');
     return;
   }
   const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, precision:extra.precision||'manual', cep:extra.cep||null, answers:{}, notes:'', link:'', createdAt:Date.now()};
-  S.items.push(it); save(); renderAll(); map.setView([lat,lng], Math.max(map.getZoom(),16));
+  S.items.push(it); save(); renderAll(); map && map.setView([lat,lng], Math.max(map.getZoom(),16));
   if (it.precision==='rua') toast('Número não encontrado: pino no meio da rua. Arraste para ajustar.');
   else if (it.precision==='cep') toast('Posição pelo CEP '+it.cep+'. Arraste se precisar.');
   startWizard(it.id, 0);
@@ -537,14 +621,14 @@ function openDetail(id){
     box.querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
       const r = await resolveResult(data[+b.dataset.i], box);
       Object.assign(it, {lat:r.lat, lng:r.lon, address:r.label, query:q, precision:r.precision, cep:r.cep});
-      save(); renderAll(); map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
+      save(); renderAll(); map && map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
     });
     box.querySelector('[data-keep]').onclick = keepText;
     box.querySelector('[data-tap]').onclick = () => { it.address = q; it.query = q; save(); closeSheet(); movingId = id; renderBanner(); };
   };
   $('#notes').oninput = e => { it.notes = e.target.value; clearTimeout(openDetail._t); openDetail._t = setTimeout(save, 400); };
   $('#redo').onclick = () => { if (st!=='pending'){ it.answers = {}; save(); renderAll(); } renderStep(id, 0); };
-  $('#locate').onclick = () => { closeSheet(); map.setView([it.lat,it.lng], 17); };
+  $('#locate').onclick = () => { closeSheet(); map && map.setView([it.lat,it.lng], 17); };
   $('#del').onclick = () => {
     const b = $('#del');
     if (b.dataset.armed){ S.items = S.items.filter(x=>x.id!==id); save(); renderAll(); closeSheet(); toast(`#${it.num} excluído`); }
@@ -586,7 +670,7 @@ function renderList(){
       else { box.querySelectorAll('.del.armed').forEach(x=>{x.classList.remove('armed'); x.textContent='✕';}); del.classList.add('armed'); del.textContent='Excluir?'; }
       return;
     }
-    const it=S.items.find(x=>x.id===c.dataset.id); map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id);
+    const it=S.items.find(x=>x.id===c.dataset.id); map && map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id);
   });
   const n = S.items.length, nd = disq.length;
   $('#listTitle').textContent = `Imóveis (${n}${nd?` · ${nd} desclassificado${nd>1?'s':''}`:''})`;
@@ -598,7 +682,7 @@ function renderCircleSettings(){
   $('#radius').value = S.radius; $('#radiusRange').value = Math.min(10000, S.radius);
   $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + ' (arraste o ponto preto para ajustar)' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
 }
-function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(circle) circle.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
+function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(map) map.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
 $('#radiusRange').oninput = e => { $('#radius').value = e.target.value; setRadius(e.target.value); };
 $('#radius').onchange = e => { setRadius(e.target.value); $('#radiusRange').value = Math.min(10000,S.radius); };
 
@@ -617,6 +701,20 @@ function renderWeights(){
   });
 }
 $('#resetWeights').onclick = () => { S.W = structuredClone(DEFAULT_W); save(); renderWeights(); renderAll(false); toast('Pesos restaurados'); };
+
+/* ---------- chave do Google ---------- */
+function renderKeyBox(){
+  const key = getKey(), on = map && map.kind === 'google';
+  $('#keyBox').innerHTML = `
+    <div class="hint">${on ? 'Usando Google Maps: mapa e busca com número de porta.' : key ? 'Chave salva, mas o Google não está ativo.' : 'Sem chave: usando OpenStreetMap, que no Brasil erra bastante a posição pelo número.'}</div>
+    <label for="gkey">Chave da API do Google Maps</label>
+    <div class="row"><input id="gkey" type="password" autocomplete="off" placeholder="AIza…" value="${esc(key)}" style="flex:1;min-width:0;padding:9px;border:1px solid var(--line);border-radius:8px">
+      <button class="btn primary" type="button" id="saveKey">Salvar</button></div>
+    ${key ? '<div class="actions"><button class="btn ghost" type="button" id="dropKey">Remover chave e voltar ao OpenStreetMap</button></div>' : ''}
+    <div class="hint">No Google Cloud, ative <b>Maps JavaScript API</b> e <b>Geocoding API</b> e restrinja a chave ao site ${esc(location.origin)}/*. A chave fica só neste navegador e não vai no backup.</div>`;
+  $('#saveKey').onclick = () => { const v = $('#gkey').value.trim(); try{ v ? localStorage.setItem(GKEY, v) : localStorage.removeItem(GKEY); }catch(e){} location.reload(); };
+  const d = $('#dropKey'); if (d) d.onclick = () => { try{ localStorage.removeItem(GKEY); }catch(e){} location.reload(); };
+}
 
 /* ---------- backup ---------- */
 $('#exportBtn').onclick = () => {
@@ -640,6 +738,7 @@ function renderBanner(){
   if (mv) h = `<div class="banner"><span>Toque no mapa na nova posição do #${mv.num}.</span><button class="btn" type="button" id="cancelMove">Cancelar</button></div>`;
   else if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
   else if (mode==='center') h = `<div class="banner"><span>Busque o endereço do centro ou toque no mapa.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
+  else if (mapError) h = `<div class="banner"><span>${esc(mapError)}</span></div>`;
   else if (!saveOk) h = `<div class="banner"><span>Este navegador não está permitindo salvar. Use “Baixar backup”.</span></div>`;
   $('#banner').innerHTML = h;
   const c0=$('#cancelMove'); if(c0) c0.onclick=()=>{movingId=null; renderBanner();};
@@ -651,9 +750,19 @@ function renderAll(redrawCircle=true){
   renderList(); drawMarkers(); renderCircleSettings();
 }
 
-drawCircle(); renderWeights(); renderAll(); renderBanner();
-const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
-if (pts.length > 1) map.fitBounds(pts, {padding:[30,30], maxZoom:16}); else if (pts.length===1) map.setView(pts[0], 15);
+renderWeights(); renderAll(); renderBanner(); renderKeyBox();
+(async () => {
+  const key = getKey();
+  if (key){
+    try{ await loadGoogle(key); map = await googleAdapter(); }
+    catch(e){ mapError = 'Google Maps não carregou ('+e.message+'). Usando OpenStreetMap.'; map = null; }
+  }
+  if (!map){ document.getElementById('map').innerHTML = ''; map = leafletAdapter(); }
+  map.onClick(onMapClick);
+  drawCircle(); renderAll(); renderBanner(); renderKeyBox();
+  const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
+  map.fitPoints(pts);
+})();
 </script>
 </body>
 </html>
