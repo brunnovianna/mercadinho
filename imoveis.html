@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Caça-apê — mapa e ranking</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{
+    --bg:#f6f5f2; --card:#fff; --ink:#1d1d1b; --muted:#6b6a66; --line:#e4e2dc;
+    --accent:#2f6f5e; --accent-soft:#e3efe9; --bad:#b4442f; --bad-soft:#f6e3de;
+    --warn:#a8731a; --warn-soft:#f7ecd6; --pending:#8a8983;
+    --r:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  .app{display:flex;flex-direction:column;height:100%;padding-bottom:env(safe-area-inset-bottom)}
+  #map{height:46vh;min-height:260px;flex:none;border-bottom:1px solid var(--line)}
+  @media (min-width:900px){
+    .app{flex-direction:row}
+    #map{height:100%;flex:1;border-bottom:none;border-right:1px solid var(--line)}
+    .panel{width:420px;flex:none}
+  }
+  .panel{flex:1;overflow:auto;padding:14px 14px 40px}
+  .row{display:flex;gap:8px;align-items:center}
+  .search input{flex:1;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 14px;white-space:nowrap}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.danger{color:var(--bad);border-color:#e8c7bf}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted);padding:8px 10px}
+  .btn:disabled{opacity:.5}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px}
+  .chip{font-size:13px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#fff}
+  .chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .section-title{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}
+  .results{margin-top:8px;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}
+  .results button{display:block;width:100%;text-align:left;padding:10px 12px;border:0;border-bottom:1px solid var(--line);background:#fff;font-size:14px}
+  .results button:last-child{border-bottom:0}
+  .hint{font-size:13px;color:var(--muted);margin:6px 0}
+  .banner{background:var(--warn-soft);color:#5d420f;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:10px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;width:100%;text-align:left}
+  .card.disq{opacity:.6}
+  .num{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;background:var(--pending)}
+  .num.done{background:var(--accent)} .num.disq{background:var(--bad)} .num.partial{background:var(--warn)}
+  .card .body{flex:1;min-width:0}
+  .card .addr{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .meta{font-size:13px;color:var(--muted);margin-top:2px}
+  .score{flex:none;text-align:right}
+  .score b{font-size:20px;display:block;line-height:1}
+  .score small{font-size:11px;color:var(--muted)}
+  .rank{font-size:11px;color:var(--muted)}
+  .empty{color:var(--muted);text-align:center;padding:24px 8px;font-size:14px}
+  .settings{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px}
+  .settings label{display:block;font-size:13px;color:var(--muted);margin:8px 0 4px}
+  .settings input[type=number]{width:90px;padding:8px;border:1px solid var(--line);border-radius:8px}
+  .wgrid{display:grid;grid-template-columns:1fr 70px;gap:6px 10px;align-items:center;font-size:14px}
+  .wgrid input{width:70px!important}
+  details summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 0}
+  /* sheet */
+  .scrim{position:fixed;inset:0;background:rgba(20,20,18,.45);display:none;z-index:2000;align-items:flex-end;justify-content:center}
+  .scrim.open{display:flex}
+  @media (min-width:700px){.scrim{align-items:center}}
+  .sheet{background:var(--bg);width:100%;max-width:520px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+  @media (min-width:700px){.sheet{border-radius:18px}}
+  .sheet h2{font-size:18px;margin:0 0 4px}
+  .sheet .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .phase{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:6px;margin-bottom:10px}
+  .phase.dq{background:var(--bad-soft);color:var(--bad)}
+  .phase.pos{background:var(--accent-soft);color:var(--accent)}
+  .phase.neg{background:var(--warn-soft);color:var(--warn)}
+  .progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:18px}
+  .progress i{display:block;height:100%;background:var(--accent)}
+  .question{font-size:22px;font-weight:650;margin:4px 0 6px}
+  .qpts{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .answers{display:grid;gap:8px}
+  .answers button{padding:14px;border-radius:12px;border:1px solid var(--line);background:#fff;font-size:16px;text-align:left;display:flex;justify-content:space-between}
+  .answers button.sel{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+  .answers button span{color:var(--muted);font-size:14px}
+  .navrow{display:flex;justify-content:space-between;margin-top:14px}
+  .brk{background:#fff;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:10px 0}
+  .brk div{display:flex;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--line);font-size:14px}
+  .brk div:last-child{border-bottom:0}
+  .brk button{all:unset;cursor:pointer;display:flex;justify-content:space-between;width:100%}
+  .plus{color:var(--accent);font-weight:600} .minus{color:var(--bad);font-weight:600} .zero{color:var(--muted)}
+  .q-unk{color:var(--warn)}
+  .total{display:flex;justify-content:space-between;align-items:baseline;margin:8px 0 4px}
+  .total b{font-size:30px}
+  .disq-box{background:var(--bad-soft);color:var(--bad);border-radius:10px;padding:12px;margin:10px 0;font-weight:600}
+  textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .pin{width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:grid;place-items:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  .pin span{transform:rotate(45deg);color:#fff;font-weight:700;font-size:13px}
+  .center-dot{width:14px;height:14px;border-radius:50%;background:var(--ink);border:3px solid #fff;box-shadow:0 0 0 1px var(--ink)}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 14px;border-radius:10px;font-size:14px;z-index:3000;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map"></div>
+  <div class="panel">
+    <form class="row search" id="searchForm">
+      <input id="q" placeholder="Digite um endereço…" autocomplete="off" enterkeyhint="search">
+      <button class="btn primary" id="searchBtn">Buscar</button>
+    </form>
+    <div class="chips">
+      <button class="chip on" data-mode="add" type="button">Adicionar imóvel</button>
+      <button class="chip" data-mode="center" type="button">Definir centro do círculo</button>
+    </div>
+    <div id="results"></div>
+    <div id="banner"></div>
+
+    <div class="section-title" id="listTitle">Imóveis</div>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <div class="chips" style="margin:0">
+        <button class="chip on" data-sort="score" type="button">Por pontos</button>
+        <button class="chip" data-sort="num" type="button">Por número</button>
+      </div>
+    </div>
+    <div id="list"></div>
+
+    <div class="section-title">Círculo</div>
+    <div class="settings">
+      <div class="hint" id="centerInfo">Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.</div>
+      <label for="radius">Raio (metros)</label>
+      <div class="row">
+        <input type="range" id="radiusRange" min="200" max="10000" step="50" style="flex:1">
+        <input type="number" id="radius" min="50" step="50">
+      </div>
+    </div>
+
+    <div class="section-title">Pesos</div>
+    <details class="settings">
+      <summary>Editar pontuação de cada critério</summary>
+      <div id="weights"></div>
+      <div class="actions"><button class="btn" id="resetWeights" type="button">Restaurar padrão</button></div>
+    </details>
+
+    <div class="section-title">Backup</div>
+    <div class="settings">
+      <div class="hint">Os dados ficam salvos neste navegador. Exporte um backup para levar para outro aparelho.</div>
+      <div class="actions">
+        <button class="btn" id="exportBtn" type="button">Baixar backup</button>
+        <button class="btn" id="copyBtn" type="button">Copiar JSON</button>
+        <label class="btn" style="margin:0">Importar<input type="file" id="importFile" accept="application/json,.json" hidden></label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+if (typeof L === 'undefined'){
+  document.getElementById('map').innerHTML = '<div style="padding:20px;font-size:14px;color:#b4442f">O mapa não carregou: este visualizador bloqueia scripts e conexões externas. Abra o arquivo no Chrome/Safari ou publique na Vercel.</div>';
+  document.getElementById('searchForm').onsubmit = e => { e.preventDefault(); };
+  throw new Error('Leaflet indisponível');
+}
+/* ---------- critérios ---------- */
+const DQ = [
+  {key:'animais', q:'Aceita animais?', reason:'Não aceita animais'},
+  {key:'tela',    q:'Aceita colocar tela de proteção?', reason:'Não aceita tela de proteção'},
+  {key:'quartos', q:'Tem 3 quartos ou mais?', reason:'Menos de 3 quartos'},
+  {key:'sol',     q:'Bate sol?', reason:'Não bate sol'},
+  {key:'suv',     q:'Cabe uma SUV na garagem?', reason:'SUV não cabe na garagem'},
+];
+// ordem de pergunta = ordem da lista (maior peso primeiro). "circulo" é calculado pelo mapa.
+const POS = [
+  {key:'circulo', label:'Dentro do círculo', auto:true},
+  {key:'valor', label:'Valor', q:'Qual o valor total?', choices:[
+    {v:'5k', t:'Até R$ 5 mil'}, {v:'6k', t:'Até R$ 6 mil'}, {v:'7k', t:'Até R$ 7 mil'}, {v:'mais', t:'Acima de R$ 7 mil'}]},
+  {key:'metragem', label:'Metragem', q:'Qual a metragem?', choices:[
+    {v:'135', t:'Acima de 135 m²'}, {v:'120', t:'Acima de 120 m² (até 135)'}, {v:'menos', t:'120 m² ou menos'}]},
+  {key:'vaga', label:'Vaga demarcada', q:'A vaga é demarcada?'},
+  {key:'portaria', label:'Portaria', q:'Tem portaria?'},
+  {key:'armario', label:'Armários', q:'Tem armários?'},
+  {key:'varanda', label:'Varanda', q:'Tem varanda?'},
+  {key:'bicicletario', label:'Bicicletário', q:'Tem bicicletário?'},
+  {key:'split', label:'Ar split', q:'Tem ar split (ou infra para split)?'},
+  {key:'elevador', label:'Elevador', q:'Tem elevador?'},
+  {key:'v110', label:'110V', q:'A voltagem é 110V?'},
+];
+const NEG = [
+  {key:'fianca', label:'Só seguro fiança', q:'Só aceita seguro fiança?'},
+  {key:'chato', label:'Proprietário chato', q:'O proprietário é chato?'},
+  {key:'andarBaixo', label:'Andar baixo', q:'O andar é baixo?'},
+  {key:'movimentada', label:'Frente p/ rua movimentada', q:'É de frente para rua movimentada?'},
+];
+const DEFAULT_W = {
+  circulo:11,
+  valor:{'5k':10,'6k':7,'7k':3,'mais':0},
+  metragem:{'135':9,'120':5,'menos':0},
+  vaga:8, portaria:7, armario:6, varanda:5, bicicletario:4, split:3, elevador:2, v110:1,
+  fianca:4, chato:3, andarBaixo:2, movimentada:1
+};
+
+/* ---------- estado ---------- */
+const KEY = 'cacaApe.v1';
+let S = load();
+function blank(){ return {center:null, radius:1500, items:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
+function load(){
+  try{ const raw = localStorage.getItem(KEY); if(raw){ const d = JSON.parse(raw); return Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); } }catch(e){}
+  return blank();
+}
+let saveOk = true;
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(S)); saveOk = true; }
+  catch(e){ saveOk = false; }
+  renderBanner();
+}
+
+/* ---------- utilidades ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),2200); }
+function dist(a,b){ const R=6371000, r=Math.PI/180; const dLat=(b.lat-a.lat)*r, dLng=(b.lng-a.lng)*r;
+  const h=Math.sin(dLat/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+function inside(it){ return S.center ? dist(S.center, it) <= S.radius : null; }
+function fmtDist(m){ return m>=1000 ? (m/1000).toFixed(1).replace('.',',')+' km' : Math.round(m)+' m'; }
+function shortAddr(d){ return d.split(',').slice(0,3).join(',').trim(); }
+
+/* ---------- pontuação ---------- */
+function status(it){
+  const a = it.answers||{};
+  if (DQ.some(d => a[d.key] === false)) return 'disq';
+  const keys = [...DQ.map(d=>d.key), ...POS.filter(p=>!p.auto).map(p=>p.key), ...NEG.map(n=>n.key)];
+  const answered = keys.filter(k => k in a && a[k] !== null).length;
+  if (answered === 0) return 'pending';
+  return answered === keys.length ? 'done' : 'partial';
+}
+function breakdown(it){
+  const a = it.answers||{}, W = S.W, rows = [];
+  const ins = inside(it);
+  rows.push({key:'circulo', label:'Dentro do círculo', val: ins===null?'sem círculo':(ins?'Sim':'Não'), pts: ins?W.circulo:0, unk: ins===null});
+  for (const p of POS.filter(p=>!p.auto)){
+    const v = a[p.key];
+    if (p.choices){
+      const c = p.choices.find(c=>c.v===v);
+      rows.push({key:p.key, label:p.label, val:c?c.t:'—', pts:c?(W[p.key][v]||0):0, unk:!c});
+    } else {
+      rows.push({key:p.key, label:p.label, val:v===true?'Sim':v===false?'Não':'—', pts:v===true?W[p.key]:0, unk:v==null});
+    }
+  }
+  for (const n of NEG){
+    const v = a[n.key];
+    rows.push({key:n.key, label:n.label, val:v===true?'Sim':v===false?'Não':'—', pts:v===true?-W[n.key]:0, unk:v==null, neg:true});
+  }
+  return rows;
+}
+function score(it){ return status(it)==='disq' ? null : breakdown(it).reduce((s,r)=>s+r.pts,0); }
+function maxScore(){ const W=S.W; return W.circulo+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
+function disqReason(it){ const a=it.answers||{}; return DQ.filter(d=>a[d.key]===false).map(d=>d.reason).join(' · '); }
+
+/* ---------- mapa ---------- */
+const map = L.map('map', {zoomControl:true}).setView([-23.965,-46.333], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+let circle=null, centerMarker=null; const markers = {};
+const COLORS = {done:'#2f6f5e', partial:'#a8731a', pending:'#8a8983', disq:'#b4442f'};
+
+function drawCircle(){
+  if (circle){ map.removeLayer(circle); circle=null; }
+  if (centerMarker){ map.removeLayer(centerMarker); centerMarker=null; }
+  if (!S.center) return;
+  circle = L.circle([S.center.lat,S.center.lng], {radius:S.radius, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1}).addTo(map);
+  centerMarker = L.marker([S.center.lat,S.center.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map);
+  centerMarker.on('dragend', e => { const p=e.target.getLatLng(); S.center={...S.center, lat:p.lat, lng:p.lng, label:'Centro ajustado no mapa'}; save(); drawCircle(); renderAll(); });
+}
+function drawMarkers(){
+  for (const id in markers){ map.removeLayer(markers[id]); delete markers[id]; }
+  for (const it of S.items){
+    const st = status(it);
+    const m = L.marker([it.lat,it.lng], {draggable:true, icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[st]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
+    m.on('click', () => openDetail(it.id));
+    m.on('dragend', e => { const p=e.target.getLatLng(); it.lat=p.lat; it.lng=p.lng; save(); renderAll(); toast(`#${it.num} reposicionado`); });
+    markers[it.id] = m;
+  }
+}
+
+/* ---------- busca ---------- */
+let mode = 'add', pendingManual = null;
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#q').placeholder = m==='center' ? 'Endereço do centro do círculo…' : 'Digite um endereço…'; $('#results').innerHTML=''; renderBanner(); }
+
+$('#searchForm').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('#q').value.trim(); if(!q) return;
+  $('#searchBtn').disabled = true; $('#results').innerHTML = '<div class="hint">Buscando…</div>';
+  try{
+    const data = await geocode(q);
+    showResults(q, data);
+  }catch(err){
+    $('#results').innerHTML = `<div class="banner"><span>A busca falhou (${esc(err.message||err)}). Você pode marcar tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
+    $('#manualBtn').onclick = () => startManual(q);
+  }finally{ $('#searchBtn').disabled = false; }
+};
+async function withTimeout(url, ms=8000){
+  const c = new AbortController(); const t = setTimeout(()=>c.abort(), ms);
+  try{ const r = await fetch(url, {signal:c.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
+  finally{ clearTimeout(t); }
+}
+// Nominatim primeiro; se falhar ou vier vazio, tenta Photon (outro geocoder baseado em OpenStreetMap)
+async function geocode(q){
+  let errs = [];
+  try{
+    const d = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=br&accept-language=pt-BR&q='+encodeURIComponent(q));
+    if (d.length) return d.map(x=>({lat:+x.lat, lon:+x.lon, display_name:x.display_name}));
+  }catch(e){ errs.push('Nominatim: '+(e.name==='AbortError'?'tempo esgotado':e.message)); }
+  try{
+    const d = await withTimeout('https://photon.komoot.io/api/?limit=5&bbox=-74,-34,-34,5.5&q='+encodeURIComponent(q));
+    return (d.features||[]).map(f=>{ const p=f.properties||{};
+      const name=[p.name, [p.street, p.housenumber].filter(Boolean).join(', '), p.district, p.city, p.state].filter(Boolean);
+      return {lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], display_name:[...new Set(name)].join(', ')}; });
+  }catch(e){ errs.push('Photon: '+(e.name==='AbortError'?'tempo esgotado':e.message)); }
+  if (errs.length) throw new Error(errs.join(' · '));
+  return [];
+}
+function showResults(q, data){
+  const box = $('#results');
+  if (!data.length){
+    box.innerHTML = `<div class="banner"><span>Nenhum resultado. Marque tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
+    $('#manualBtn').onclick = () => startManual(q); return;
+  }
+  box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.display_name)}</button>`).join('') +
+    `<button type="button" data-manual="1" style="color:var(--muted)">Nenhum desses — marcar no mapa</button></div>`;
+  box.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => { const d=data[+b.dataset.i]; pick(q, d.lat, d.lon, d.display_name); });
+  box.querySelector('[data-manual]').onclick = () => startManual(q);
+}
+function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
+map.on('click', e => {
+  if (pendingManual !== null){ const q=pendingManual; pendingManual=null; pick(q, e.latlng.lat, e.latlng.lng, q); renderBanner(); return; }
+  if (mode==='center'){ pick('Ponto no mapa', e.latlng.lat, e.latlng.lng, 'Ponto marcado no mapa'); }
+});
+function pick(q, lat, lng, display){
+  $('#results').innerHTML=''; $('#q').value='';
+  if (mode==='center'){
+    S.center = {lat, lng, label: display}; save(); drawCircle(); renderAll();
+    map.fitBounds(circle.getBounds(), {padding:[20,20]}); setMode('add'); toast('Centro do círculo definido');
+    return;
+  }
+  const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, answers:{}, notes:'', link:'', createdAt:Date.now()};
+  S.items.push(it); save(); renderAll(); map.setView([lat,lng], Math.max(map.getZoom(),15));
+  startWizard(it.id, 0);
+}
+
+/* ---------- questionário ---------- */
+function steps(){
+  return [
+    ...DQ.map(d=>({...d, phase:'dq'})),
+    ...POS.filter(p=>!p.auto).map(p=>({...p, phase:'pos'})),
+    ...NEG.map(n=>({...n, phase:'neg'})),
+  ];
+}
+function startWizard(id, i){ renderStep(id, i); openSheet(); }
+function renderStep(id, i){
+  const it = S.items.find(x=>x.id===id); if(!it) return closeSheet();
+  const ST = steps();
+  if (i >= ST.length) return openDetail(id);
+  const s = ST[i], a = it.answers, W = S.W, cur = a[s.key];
+  const phaseTxt = {dq:'Eliminatória', pos:'Pontua', neg:'Tira pontos'}[s.phase];
+  let ptsTxt = '';
+  if (s.phase==='dq') ptsTxt = '“Não” desclassifica o imóvel.';
+  else if (s.phase==='neg') ptsTxt = `“Sim” tira ${W[s.key]} ponto${W[s.key]>1?'s':''}.`;
+  else if (!s.choices) ptsTxt = `“Sim” vale ${W[s.key]} ponto${W[s.key]>1?'s':''}.`;
+  let opts;
+  if (s.choices){
+    opts = s.choices.map(c=>({v:c.v, t:c.t, hint:`+${W[s.key][c.v]||0}`}));
+  } else {
+    opts = [{v:true, t:'Sim'}, {v:false, t:'Não'}];
+  }
+  opts.push({v:null, t:'Não sei ainda', hint:'pular'});
+  const insideTxt = (()=>{ const ins=inside(it); if(ins===null) return 'Sem círculo definido'; return (ins?'Dentro':'Fora')+' do círculo · '+fmtDist(dist(S.center,it))+' do centro'; })();
+  $('#sheet').innerHTML = `
+    <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
+    <div class="sub">${esc(insideTxt)}</div>
+    <div class="progress"><i style="width:${Math.round(i/ST.length*100)}%"></i></div>
+    <span class="phase ${s.phase}">${phaseTxt}</span>
+    <div class="question">${esc(s.q)}</div>
+    <div class="qpts">${ptsTxt}</div>
+    <div class="answers">${opts.map((o,k)=>`<button type="button" data-k="${k}" class="${(s.key in a) && cur===o.v ? 'sel':''}">${esc(o.t)}${o.hint?`<span>${esc(o.hint)}</span>`:''}</button>`).join('')}</div>
+    <div class="navrow">
+      <button class="btn ghost" type="button" id="prev" ${i===0?'disabled':''}>← Voltar</button>
+      <button class="btn ghost" type="button" id="toDetail">Ver resumo</button>
+    </div>`;
+  $('#sheet').querySelectorAll('.answers button').forEach(b => b.onclick = () => {
+    const o = opts[+b.dataset.k];
+    it.answers[s.key] = o.v; save(); renderAll();
+    if (s.phase==='dq' && o.v===false) return openDetail(id);
+    renderStep(id, i+1);
+  });
+  $('#prev').onclick = () => renderStep(id, i-1);
+  $('#toDetail').onclick = () => openDetail(id);
+}
+
+/* ---------- detalhe ---------- */
+function openDetail(id){
+  const it = S.items.find(x=>x.id===id); if(!it) return;
+  const st = status(it), sc = score(it), rows = breakdown(it), ST = steps();
+  const ranked = rankedList(); const pos = ranked.findIndex(x=>x.id===id);
+  const dqRows = DQ.map(d=>{ const v=it.answers[d.key]; return {key:d.key, label:d.q, val:v===true?'Sim':v===false?'Não':'—', bad:v===false, unk:v==null}; });
+  const stepIndex = k => ST.findIndex(s=>s.key===k);
+  $('#sheet').innerHTML = `
+    <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
+    <div class="sub">${esc(it.address)}</div>
+    ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
+      <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
+    <div class="section-title" style="margin-top:8px">Eliminatórias</div>
+    <div class="brk">${dqRows.map(r=>`<div><button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)}</span><span class="${r.bad?'minus':r.unk?'q-unk':'zero'}">${r.val}</span></button></div>`).join('')}</div>
+    ${st==='disq' ? '' : `
+    <div class="section-title">Pontuação</div>
+    <div class="brk">${rows.map(r=>`<div>${r.key==='circulo'
+        ? `<span>${esc(r.label)} <small class="hint">(${esc(r.val)})</small></span><span class="${r.pts>0?'plus':'zero'}">${r.pts>0?'+'+r.pts:'0'}</span>`
+        : `<button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)} <small class="${r.unk?'q-unk':'hint'}">(${esc(r.unk?'não respondido':r.val)})</small></span><span class="${r.pts>0?'plus':r.pts<0?'minus':'zero'}">${r.pts>0?'+'+r.pts:r.pts}</span></button>`}</div>`).join('')}</div>`}
+    <div class="section-title">Anotações</div>
+    <textarea id="notes" placeholder="Link do anúncio, telefone, impressões da visita…">${esc(it.notes)}</textarea>
+    <div class="actions">
+      <button class="btn primary" type="button" id="redo">${st==='pending'?'Responder questionário':'Refazer questionário'}</button>
+      <button class="btn" type="button" id="locate">Ver no mapa</button>
+      <button class="btn danger" type="button" id="del">Excluir</button>
+      <button class="btn ghost" type="button" id="close" style="margin-left:auto">Fechar</button>
+    </div>
+    <div class="hint" style="margin-top:10px">Toque em qualquer resposta para alterá-la. Para corrigir a posição, arraste o pino no mapa.</div>`;
+  $('#sheet').querySelectorAll('[data-step]').forEach(b => b.onclick = () => renderStep(id, +b.dataset.step));
+  $('#notes').oninput = e => { it.notes = e.target.value; clearTimeout(openDetail._t); openDetail._t = setTimeout(save, 400); };
+  $('#redo').onclick = () => { if (st!=='pending'){ it.answers = {}; save(); renderAll(); } renderStep(id, 0); };
+  $('#locate').onclick = () => { closeSheet(); map.setView([it.lat,it.lng], 17); };
+  $('#del').onclick = () => {
+    const b = $('#del');
+    if (b.dataset.armed){ S.items = S.items.filter(x=>x.id!==id); save(); renderAll(); closeSheet(); toast(`#${it.num} excluído`); }
+    else { b.dataset.armed = 1; b.textContent = 'Toque de novo para excluir'; }
+  };
+  $('#close').onclick = closeSheet;
+  openSheet();
+}
+function openSheet(){ $('#scrim').classList.add('open'); }
+function closeSheet(){ $('#scrim').classList.remove('open'); save(); }
+$('#scrim').onclick = e => { if (e.target.id==='scrim') closeSheet(); };
+
+/* ---------- lista ---------- */
+function rankedList(){
+  return S.items.filter(it=>status(it)!=='disq').sort((a,b)=>score(b)-score(a) || a.num-b.num);
+}
+function renderList(){
+  const box = $('#list');
+  if (!S.items.length){ box.innerHTML = '<div class="empty">Nenhum imóvel ainda. Busque um endereço acima para começar.</div>'; return; }
+  const ranked = rankedList();
+  const disq = S.items.filter(it=>status(it)==='disq').sort((a,b)=>a.num-b.num);
+  const order = S.sort==='num' ? [...S.items].sort((a,b)=>a.num-b.num) : [...ranked, ...disq];
+  box.innerHTML = order.map(it => {
+    const st = status(it), sc = score(it), ins = inside(it), r = ranked.findIndex(x=>x.id===it.id);
+    const meta = st==='disq' ? esc(disqReason(it))
+      : [ins===null?null:(ins?'Dentro do círculo':'Fora do círculo')+' · '+fmtDist(dist(S.center,it)), st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
+    return `<button class="card ${st==='disq'?'disq':''}" type="button" data-id="${it.id}">
+      <div class="num ${st}">${it.num}</div>
+      <div class="body"><div class="addr">${esc(shortAddr(it.address))}</div><div class="meta">${meta}</div></div>
+      <div class="score">${st==='disq' ? '<small>fora</small>' : `<b>${sc}</b><span class="rank">${r+1}º</span>`}</div>
+    </button>`;
+  }).join('');
+  box.querySelectorAll('.card').forEach(c => c.onclick = () => { const it=S.items.find(x=>x.id===c.dataset.id); map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id); });
+  const n = S.items.length, nd = disq.length;
+  $('#listTitle').textContent = `Imóveis (${n}${nd?` · ${nd} desclassificado${nd>1?'s':''}`:''})`;
+}
+document.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { S.sort=b.dataset.sort; save(); renderAll(); });
+
+/* ---------- círculo / pesos ---------- */
+function renderCircleSettings(){
+  $('#radius').value = S.radius; $('#radiusRange').value = Math.min(10000, S.radius);
+  $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + ' (arraste o ponto preto para ajustar)' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
+}
+function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(circle) circle.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
+$('#radiusRange').oninput = e => { $('#radius').value = e.target.value; setRadius(e.target.value); };
+$('#radius').onchange = e => { setRadius(e.target.value); $('#radiusRange').value = Math.min(10000,S.radius); };
+
+function renderWeights(){
+  const W = S.W;
+  const line = (label, path) => `<span>${esc(label)}</span><input type="number" step="1" data-w="${path}" value="${path.split('.').reduce((o,k)=>o[k],W)}">`;
+  let h = '<div class="wgrid">';
+  h += line('Dentro do círculo','circulo');
+  POS.filter(p=>!p.auto).forEach(p => { if(p.choices) p.choices.forEach(c=>h+=line(`${p.label}: ${c.t}`, `${p.key}.${c.v}`)); else h+=line(p.label, p.key); });
+  NEG.forEach(n => h += line(`${n.label} (desconta)`, n.key));
+  h += '</div>';
+  $('#weights').innerHTML = h;
+  $('#weights').querySelectorAll('input').forEach(inp => inp.onchange = () => {
+    const path = inp.dataset.w.split('.'); let o = S.W; while(path.length>1) o = o[path.shift()];
+    o[path[0]] = Math.abs(Math.round(+inp.value||0)); inp.value = o[path[0]]; save(); renderAll(false);
+  });
+}
+$('#resetWeights').onclick = () => { S.W = structuredClone(DEFAULT_W); save(); renderWeights(); renderAll(false); toast('Pesos restaurados'); };
+
+/* ---------- backup ---------- */
+$('#exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(S,null,2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'caca-ape-' + new Date().toISOString().slice(0,10) + '.json'; document.body.appendChild(a); a.click(); a.remove();
+};
+$('#copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(JSON.stringify(S)); toast('JSON copiado'); }catch(e){ toast('Não foi possível copiar'); } };
+$('#importFile').onchange = async e => {
+  const f = e.target.files[0]; if(!f) return;
+  try{ const d = JSON.parse(await f.text()); if(!Array.isArray(d.items)) throw 0;
+    S = Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
+  }catch(err){ toast('Arquivo inválido'); }
+  e.target.value='';
+};
+
+/* ---------- render ---------- */
+function renderBanner(){
+  let h = '';
+  if (pendingManual !== null) h = `<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
+  else if (mode==='center') h = `<div class="banner"><span>Busque o endereço do centro ou toque no mapa.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
+  else if (!saveOk) h = `<div class="banner"><span>Este navegador não está permitindo salvar. Use “Baixar backup”.</span></div>`;
+  $('#banner').innerHTML = h;
+  const c1=$('#cancelManual'); if(c1) c1.onclick=()=>{pendingManual=null; renderBanner();};
+  const c2=$('#cancelCenter'); if(c2) c2.onclick=()=>setMode('add');
+}
+function renderAll(redrawCircle=true){
+  document.querySelectorAll('[data-sort]').forEach(b=>b.classList.toggle('on', b.dataset.sort===S.sort));
+  renderList(); drawMarkers(); renderCircleSettings();
+}
+
+drawCircle(); renderWeights(); renderAll(); renderBanner();
+const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
+if (pts.length > 1) map.fitBounds(pts, {padding:[30,30], maxZoom:16}); else if (pts.length===1) map.setView(pts[0], 15);
+</script>
+</body>
+</html>
