@@ -107,7 +107,7 @@
   <div id="map"></div>
   <div class="panel">
     <form class="row search" id="searchForm">
-      <input id="q" placeholder="Endereço ou coordenadas…" autocomplete="off" enterkeyhint="search">
+      <input id="q" placeholder="Cole as coordenadas ou digite o endereço" autocomplete="off" enterkeyhint="search">
       <button class="btn primary" id="searchBtn">Buscar</button>
     </form>
     <div class="chips">
@@ -142,9 +142,6 @@
       <div id="weights"></div>
       <div class="actions"><button class="btn" id="resetWeights" type="button">Restaurar padrão</button></div>
     </details>
-
-    <div class="section-title">Google Maps</div>
-    <div class="settings" id="keyBox"></div>
 
     <div class="section-title">Backup</div>
     <div class="settings">
@@ -266,207 +263,99 @@ function score(it){ return status(it)==='disq' ? null : breakdown(it).reduce((s,
 function maxScore(){ const W=S.W; return W.circulo+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
 function disqReason(it){ const a=it.answers||{}; return DQ.filter(d=>a[d.key]===false).map(d=>d.reason).join(' · '); }
 
-/* ---------- mapa (Google Maps com chave; OpenStreetMap sem chave) ---------- */
-const GKEY = 'cacaApe.gkey';
-function getKey(){ try{ return localStorage.getItem(GKEY)||''; }catch(e){ return ''; } }
+/* ---------- mapa ---------- */
 const COLORS = {done:'#2f6f5e', partial:'#a8731a', pending:'#8a8983', disq:'#b4442f'};
-let map = null, mapError = '';
-const htmlEl = h => { const d=document.createElement('div'); d.innerHTML=h; return d.firstElementChild; };
-const pinHtml = it => `<div class="pin" style="background:${COLORS[status(it)]}"><span>${it.num}</span></div>`;
-
-function loadGoogle(key){
-  return new Promise((res, rej) => {
-    window.__gmInit = () => res();
-    window.gm_authFailure = () => { mapError = 'O Google recusou a chave (verifique se a Maps JavaScript API está ativa e se o domínio está liberado).'; renderBanner(); renderKeyBox(); };
-    const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&libraries=marker,geocoding&language=pt-BR&region=BR&callback=__gmInit`;
-    s.async = true; s.onerror = () => rej(new Error('script do Google não carregou'));
-    document.head.appendChild(s);
-    setTimeout(() => rej(new Error('tempo esgotado carregando o Google')), 15000);
-  });
-}
-async function googleAdapter(){
-  const {Map, Circle} = await google.maps.importLibrary('maps');
-  const {AdvancedMarkerElement} = await google.maps.importLibrary('marker');
-  const g = new Map(document.getElementById('map'), {center:{lat:-23.965,lng:-46.333}, zoom:13, mapId:'DEMO_MAP_ID',
-    gestureHandling:'greedy', clickableIcons:false, streetViewControl:false, mapTypeControl:false, fullscreenControl:false});
-  const ll = p => typeof p.lat === 'function' ? {lat:p.lat(), lng:p.lng()} : {lat:p.lat, lng:p.lng};
-  let circle = null, center = null, markers = [];
-  return {
-    kind:'google',
-    setView([lat,lng], z){ g.setCenter({lat,lng}); if (z) g.setZoom(z); },
-    getZoom(){ return g.getZoom(); },
-    onClick(fn){ g.addListener('click', e => e.latLng && fn(e.latLng.lat(), e.latLng.lng())); },
-    fitPoints(pts){ if (!pts.length) return; if (pts.length===1) return this.setView(pts[0], 15);
-      const b = new google.maps.LatLngBounds(); pts.forEach(p => b.extend({lat:p[0], lng:p[1]})); g.fitBounds(b, 40); },
-    setCircle(c, r, onDrag){
-      if (circle){ circle.setMap(null); circle = null; } if (center){ center.map = null; center = null; }
-      if (!c) return;
-      circle = new Circle({map:g, center:{lat:c.lat,lng:c.lng}, radius:r, strokeColor:'#2f6f5e', strokeWeight:2, fillColor:'#2f6f5e', fillOpacity:.1, clickable:false});
-      center = new AdvancedMarkerElement({map:g, position:{lat:c.lat,lng:c.lng}, content:htmlEl('<div class="center-dot" style="transform:translateY(50%)"></div>'), gmpDraggable:true});
-      center.addListener('dragend', () => { const p = ll(center.position); onDrag(p.lat, p.lng); });
-    },
-    setRadius(r){ if (circle) circle.setRadius(r); },
-    fitCircle(){ if (circle) g.fitBounds(circle.getBounds(), 20); },
-    setMarkers(list){
-      markers.forEach(m => m.map = null);
-      markers = list.map(o => { const m = new AdvancedMarkerElement({map:g, position:{lat:o.lat,lng:o.lng}, content:htmlEl(o.html), gmpDraggable:true});
-        m.addListener('click', o.onClick); m.addListener('dragend', () => { const p = ll(m.position); o.onDrag(p.lat, p.lng); }); return m; });
-    }
-  };
-}
-function leafletAdapter(){
-  const m = L.map('map', {zoomControl:true}).setView([-23.965,-46.333], 13);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(m);
-  let circle = null, center = null, markers = [];
-  return {
-    kind:'osm',
-    setView(p, z){ m.setView(p, z); },
-    getZoom(){ return m.getZoom(); },
-    onClick(fn){ m.on('click', e => fn(e.latlng.lat, e.latlng.lng)); },
-    fitPoints(pts){ if (!pts.length) return; if (pts.length===1) return m.setView(pts[0], 15); m.fitBounds(pts, {padding:[30,30], maxZoom:16}); },
-    setCircle(c, r, onDrag){
-      if (circle){ m.removeLayer(circle); circle = null; } if (center){ m.removeLayer(center); center = null; }
-      if (!c) return;
-      circle = L.circle([c.lat,c.lng], {radius:r, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1, interactive:false}).addTo(m);
-      center = L.marker([c.lat,c.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(m);
-      center.on('dragend', e => { const p = e.target.getLatLng(); onDrag(p.lat, p.lng); });
-    },
-    setRadius(r){ if (circle) circle.setRadius(r); },
-    fitCircle(){ if (circle) m.fitBounds(circle.getBounds(), {padding:[20,20]}); },
-    setMarkers(list){
-      markers.forEach(x => m.removeLayer(x));
-      markers = list.map(o => { const k = L.marker([o.lat,o.lng], {draggable:true, icon:L.divIcon({className:'', html:o.html, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(m);
-        k.on('click', o.onClick); k.on('dragend', e => { const p = e.target.getLatLng(); o.onDrag(p.lat, p.lng); }); return k; });
-    }
-  };
-}
+const map = L.map('map', {zoomControl:true}).setView([-23.965,-46.333], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+let circle = null, centerMarker = null, markers = [];
 function drawCircle(){
-  if (!map) return;
-  map.setCircle(S.center, S.radius, (lat,lng) => { S.center = {...S.center, lat, lng, label:'Centro ajustado no mapa'}; save(); drawCircle(); renderAll(); });
+  if (circle){ map.removeLayer(circle); circle = null; }
+  if (centerMarker){ map.removeLayer(centerMarker); centerMarker = null; }
+  if (!S.center) return;
+  circle = L.circle([S.center.lat,S.center.lng], {radius:S.radius, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1, interactive:false}).addTo(map);
+  centerMarker = L.marker([S.center.lat,S.center.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map);
+  centerMarker.on('dragend', e => { const p = e.target.getLatLng(); S.center = {...S.center, lat:p.lat, lng:p.lng}; save(); drawCircle(); renderAll(); });
 }
 function drawMarkers(){
-  if (!map) return;
-  map.setMarkers(S.items.map(it => ({lat:it.lat, lng:it.lng, html:pinHtml(it), onClick:() => openDetail(it.id),
-    onDrag:(lat,lng) => { it.lat=lat; it.lng=lng; it.precision='ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); }})));
+  markers.forEach(m => map.removeLayer(m));
+  markers = S.items.map(it => {
+    const m = L.marker([it.lat,it.lng], {draggable:true, icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[status(it)]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
+    m.on('click', () => openDetail(it.id));
+    m.on('dragend', e => { const p = e.target.getLatLng(); it.lat = p.lat; it.lng = p.lng; save(); renderAll(); toast(`#${it.num} reposicionado`); });
+    return m;
+  });
 }
 
 /* ---------- busca ---------- */
-let mode = 'add', pendingManual = null, movingId = null;
+let mode = 'add', pendingManual = null;
 document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
-function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#q').placeholder = m==='center' ? 'Endereço do centro do círculo…' : 'Endereço ou coordenadas…'; $('#results').innerHTML=''; renderBanner(); }
+function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#results').innerHTML=''; renderBanner(); }
 
+// Coordenadas coladas ("-23.95512, -46.32211") vão direto para o ponto exato; texto vai para a busca do OpenStreetMap.
 $('#searchForm').onsubmit = async e => {
   e.preventDefault();
-  const q = $('#q').value.trim(); if(!q) return;
+  const q = $('#q').value.trim(); if (!q) return;
   $('#searchBtn').disabled = true; $('#results').innerHTML = '<div class="hint">Buscando…</div>';
-  const c = parseCoords(q);
-  if (c){
-    try{ const label = await reverseLabel(c.lat, c.lng); pick(q, c.lat, c.lng, label, {precision:'coord'}); }
-    finally{ $('#searchBtn').disabled = false; }
-    return;
-  }
   try{
-    const data = await geocode(q);
-    showResults(q, data);
+    const c = parseCoords(q);
+    if (c) return pick(q, c.lat, c.lng, await reverseLabel(c.lat, c.lng));
+    showResults(q, await geocode(q));
   }catch(err){
-    $('#results').innerHTML = `<div class="banner"><span>A busca falhou (${esc(err.message||err)}). Você pode marcar tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
+    $('#results').innerHTML = `<div class="banner"><span>A busca falhou. Você pode marcar tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
     $('#manualBtn').onclick = () => startManual(q);
   }finally{ $('#searchBtn').disabled = false; }
 };
-// coordenadas coladas do Google Maps ("-23.95512, -46.32211") ou link longo com @lat,lng / q=lat,lng
 function parseCoords(q){
   const m = q.match(/(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/);
   if (!m) return null;
   const lat = +m[1], lng = +m[2];
   return (lat >= -35 && lat <= 6 && lng >= -75 && lng <= -33) ? {lat, lng} : null;
 }
-async function reverseLabel(lat, lng){
-  try{
-    const d = await withTimeout(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=pt-BR&lat=${lat}&lon=${lng}`, 6000);
-    const a = d.address || {};
-    const road = a.road || a.pedestrian, sub = a.suburb || a.neighbourhood || a.city_district, city = a.city || a.town || a.municipality;
-    if (road) return [road + (a.house_number ? ', ' + a.house_number : ''), sub, city].filter(Boolean).join(' — ');
-  }catch(e){}
-  return `Ponto ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-}
 async function withTimeout(url, ms=8000){
   const c = new AbortController(); const t = setTimeout(()=>c.abort(), ms);
   try{ const r = await fetch(url, {signal:c.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
   finally{ clearTimeout(t); }
 }
+async function reverseLabel(lat, lng){
+  try{
+    const d = await withTimeout(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=pt-BR&lat=${lat}&lon=${lng}`, 6000);
+    const a = d.address || {}, road = a.road || a.pedestrian;
+    if (road) return [road + (a.house_number ? ', ' + a.house_number : ''), a.suburb || a.neighbourhood || a.city_district, a.city || a.town || a.municipality].filter(Boolean).join(' — ');
+  }catch(e){}
+  return `Ponto ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
 const UF = {'Acre':'AC','Alagoas':'AL','Amapá':'AP','Amazonas':'AM','Bahia':'BA','Ceará':'CE','Distrito Federal':'DF','Espírito Santo':'ES','Goiás':'GO','Maranhão':'MA','Mato Grosso':'MT','Mato Grosso do Sul':'MS','Minas Gerais':'MG','Pará':'PA','Paraíba':'PB','Paraná':'PR','Pernambuco':'PE','Piauí':'PI','Rio de Janeiro':'RJ','Rio Grande do Norte':'RN','Rio Grande do Sul':'RS','Rondônia':'RO','Roraima':'RR','Santa Catarina':'SC','São Paulo':'SP','Sergipe':'SE','Tocantins':'TO'};
 const norm = s => String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
-// número da casa digitado (ignora CEP)
 function parseNumber(q){
   const s = q.replace(/\b\d{5}-?\d{3}\b/g,' ');
   const m = s.match(/(?:,|\bn[º°o.]?|\bn[uú]mero)\s*(\d{1,5})\b/i);
   if (m) return +m[1];
-  // senão, o último número solto que não faz parte do nome (ex.: "Rua 15 de Novembro")
   const all = [...s.matchAll(/\s(\d{1,5})\b(?!\s*(?:de|º|ª)\b)/gi)];
   return all.length ? +all[all.length-1][1] : null;
 }
-function errMsg(e){ return e.name==='AbortError' ? 'tempo esgotado' : e.message; }
-
-// Nominatim primeiro; se falhar ou vier vazio, tenta Photon. Agrupa trechos repetidos da mesma rua (um por CEP).
+// Busca por texto no OpenStreetMap. Trechos da mesma rua (um por bairro) viram um resultado só;
+// o bairro certo do número sai da faixa de numeração dos CEPs (ViaCEP).
 async function geocode(q){
-  if (map && map.kind === 'google'){
-    try{ return await geocodeGoogle(q); }
-    catch(e){ toast('Busca do Google falhou ('+(e.code||e.message)+'). Usando OpenStreetMap.'); }
-  }
-  return geocodeOSM(q);
-}
-async function geocodeGoogle(q){
-  const {Geocoder} = await google.maps.importLibrary('geocoding');
-  let results;
-  try{ ({results} = await new Geocoder().geocode({address:q, region:'br', componentRestrictions:{country:'BR'}})); }
-  catch(e){ if (e.code === 'ZERO_RESULTS') return []; throw e; }
   const num = parseNumber(q);
-  return results.slice(0,6).map(r => {
-    const lt = r.geometry.location_type, hasNum = r.address_components.some(c => c.types.includes('street_number'));
-    return {lat:r.geometry.location.lat(), lon:r.geometry.location.lng(), label:r.formatted_address.replace(/, (Brasil|Brazil)$/,''),
-      google:true, num, exact:hasNum, precision: hasNum && (lt==='ROOFTOP' || lt==='RANGE_INTERPOLATED') ? 'numero' : lt==='APPROXIMATE' ? 'local' : 'rua'};
-  });
-}
-async function geocodeOSM(q){
-  const num = parseNumber(q), errs = [];
-  let list = [];
-  try{
-    const d = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=15&countrycodes=br&accept-language=pt-BR&q='+encodeURIComponent(q));
-    list = d.map(x => { const a = x.address||{};
-      return {lat:+x.lat, lon:+x.lon, road:a.road||a.pedestrian||a.footway||x.name, hn:a.house_number||null,
-        suburb:a.suburb||a.neighbourhood||a.city_district||a.quarter||'', city:a.city||a.town||a.municipality||a.village||'',
-        uf:(a['ISO3166-2-lvl4']||'').replace('BR-','') || UF[a.state] || ''}; });
-  }catch(e){ errs.push('Nominatim: '+errMsg(e)); }
-  if (!list.length){
-    try{
-      const d = await withTimeout('https://photon.komoot.io/api/?limit=15&bbox=-74,-34,-34,5.5&q='+encodeURIComponent(q));
-      list = (d.features||[]).map(f => { const p = f.properties||{};
-        return {lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], road:p.street||p.name, hn:p.housenumber||null,
-          suburb:p.district||p.locality||'', city:p.city||p.county||'', uf:UF[p.state]||''}; });
-    }catch(e){ errs.push('Photon: '+errMsg(e)); }
-  }
-  if (!list.length && errs.length) throw new Error(errs.join(' · '));
-  // Uma rua longa vem picada em trechos (um por bairro/CEP). Sem número exato no OSM, o bairro de cada trecho
-  // não diz nada sobre o número digitado: junta todos os trechos da mesma rua num resultado só e
-  // descobre o bairro certo depois, pela faixa de numeração do CEP.
+  const d = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=15&countrycodes=br&accept-language=pt-BR&q='+encodeURIComponent(q));
   const groups = new Map(), out = [];
-  for (const r of list){
+  for (const x of d){
+    const a = x.address||{};
+    const r = {lat:+x.lat, lon:+x.lon, road:a.road||a.pedestrian||a.footway||x.name, hn:a.house_number||null,
+      suburb:a.suburb||a.neighbourhood||a.city_district||a.quarter||'', city:a.city||a.town||a.municipality||a.village||'',
+      uf:(a['ISO3166-2-lvl4']||'').replace('BR-','') || UF[a.state] || '', num};
     const approx = num && !r.hn;
     const k = norm(approx ? [r.road, r.city].join('|') : [r.road, r.hn, r.suburb, r.city].join('|'));
     if (groups.has(k)){ groups.get(k).segments.push({lat:r.lat, lon:r.lon, suburb:r.suburb}); continue; }
     r.segments = [{lat:r.lat, lon:r.lon, suburb:r.suburb}];
-    r.num = num; r.exact = !!r.hn;
     groups.set(k, r); out.push(r);
   }
   for (const r of out){
-    const n = r.hn || r.num, showSub = r.exact || r.segments.length === 1 || !r.num;
+    const n = r.hn || r.num, showSub = r.hn || r.segments.length === 1 || !r.num;
     r.label = [r.road ? r.road + (n ? ', ' + n : '') : null, showSub ? r.suburb : null, r.city ? r.city + (r.uf ? ' - ' + r.uf : '') : null].filter(Boolean).join(' — ');
   }
   return out.slice(0, 6);
 }
-
-// OpenStreetMap quase não tem numeração no Brasil: acha o CEP do trecho pelo número (ViaCEP) e pega a coordenada do CEP
 function inRange(comp, n){
   const c = norm(comp);
   if (!c) return true;
@@ -479,33 +368,19 @@ function inRange(comp, n){
   if (/lado\s+par/.test(c) && n % 2 === 1) return false;
   return n >= lo && n <= hi;
 }
-async function refineByNumber(r){
-  if (!r.num || r.exact || !r.road || !r.city || !r.uf) return null;
-  const tries = [r.road, r.road.replace(/^(rua|avenida|av\.?|travessa|alameda|praca|praça|estrada|rodovia)\s+/i,'')];
-  let rows = [];
-  for (const t of tries){
+async function bairroDoNumero(r){
+  if (!r.num || r.hn || !r.road || !r.city || !r.uf || r.segments.length < 2) return null;
+  for (const t of [r.road, r.road.replace(/^(rua|avenida|av\.?|travessa|alameda|praca|praça|estrada|rodovia)\s+/i,'')]){
     if (t.length < 3) continue;
     try{
-      const d = await withTimeout(`https://viacep.com.br/ws/${r.uf}/${encodeURIComponent(r.city)}/${encodeURIComponent(t)}/json/`, 7000);
-      if (Array.isArray(d) && d.length){ rows = d; break; }
+      const rows = await withTimeout(`https://viacep.com.br/ws/${r.uf}/${encodeURIComponent(r.city)}/${encodeURIComponent(t)}/json/`, 7000);
+      if (!Array.isArray(rows) || !rows.length) continue;
+      const same = rows.filter(x => norm(x.logradouro) === norm(r.road)), pool = same.length ? same : rows;
+      const hit = pool.find(x => x.complemento && inRange(x.complemento, r.num));
+      return hit ? hit.bairro : null;
     }catch(e){}
   }
-  if (!rows.length) return null;
-  const same = rows.filter(x => norm(x.logradouro) === norm(r.road));
-  const pool = same.length ? same : rows;
-  const hit = pool.find(x => x.complemento && inRange(x.complemento, r.num)) || (pool.length === 1 ? pool[0] : null);
-  if (!hit) return null;
-  const cep = hit.cep.replace(/\D/g,'');
-  try{
-    const a = await withTimeout(`https://cep.awesomeapi.com.br/json/${cep}`, 7000);
-    if (a && a.lat && a.lng) return {lat:+a.lat, lon:+a.lng, cep:hit.cep, bairro:hit.bairro};
-  }catch(e){}
-  try{
-    const b = await withTimeout(`https://brasilapi.com.br/api/cep/v2/${cep}`, 7000);
-    const c = b && b.location && b.location.coordinates;
-    if (c && c.latitude && c.longitude) return {lat:+c.latitude, lon:+c.longitude, cep:hit.cep, bairro:hit.bairro};
-  }catch(e){}
-  return {cep:hit.cep, bairro:hit.bairro};
+  return null;
 }
 function showResults(q, data){
   const box = $('#results');
@@ -516,54 +391,33 @@ function showResults(q, data){
   box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.label)}</button>`).join('') +
     `<button type="button" data-manual="1" style="color:var(--muted)">Nenhum desses — marcar no mapa</button></div>`;
   box.querySelectorAll('button[data-i]').forEach(b => b.onclick = async () => {
-    const r = await resolveResult(data[+b.dataset.i], box);
-    pick(q, r.lat, r.lon, r.label, {precision:r.precision, cep:r.cep});
+    const r = await resolveResult(data[+b.dataset.i]);
+    pick(q, r.lat, r.lon, r.label);
   });
   box.querySelector('[data-manual]').onclick = () => startManual(q);
 }
-async function resolveResult(d, box){
-  if (d.google) return {lat:d.lat, lon:d.lon, label:d.label, precision:d.precision, cep:null};
-  let lat = d.lat, lon = d.lon, precision = d.exact ? 'numero' : (d.num ? 'rua' : 'local'), cep = null;
-  if (d.num && !d.exact){
-    if (box) box.innerHTML = '<div class="hint">Localizando o número '+d.num+'…</div>';
-    const ref = await refineByNumber(d);
-    let label = d.label;
-    if (ref){
-      cep = ref.cep;
-      const segs = d.segments || [{lat:d.lat, lon:d.lon, suburb:d.suburb}];
-      // trecho da rua no bairro do CEP; se não houver, o trecho mais perto da coordenada do CEP
-      let seg = segs.find(x => ref.bairro && norm(x.suburb) === norm(ref.bairro));
-      if (!seg && ref.lat) seg = segs.reduce((b,x) => dist({lat:ref.lat,lng:ref.lon},{lat:x.lat,lng:x.lon}) < dist({lat:ref.lat,lng:ref.lon},{lat:b.lat,lng:b.lon}) ? x : b);
-      seg = seg || segs[0];
-      lat = seg.lat; lon = seg.lon;
-      // só aceita a coordenada do CEP se ela cair perto desse trecho da rua
-      if (ref.lat && dist({lat:ref.lat,lng:ref.lon},{lat:seg.lat,lng:seg.lon}) <= 800){ lat = ref.lat; lon = ref.lon; precision = 'cep'; }
-      if (ref.bairro) label = [d.road + ', ' + d.num, ref.bairro, d.city + (d.uf ? ' - ' + d.uf : '')].join(' — ');
-    }
-    return {lat, lon, label, precision, cep};
-  }
-  return {lat, lon, label:d.label, precision, cep};
+async function resolveResult(d){
+  const bairro = await bairroDoNumero(d);
+  if (!bairro) return {lat:d.lat, lon:d.lon, label:d.label};
+  const seg = d.segments.find(x => norm(x.suburb) === norm(bairro)) || d.segments[0];
+  return {lat:seg.lat, lon:seg.lon, label:[d.road + ', ' + d.num, bairro, d.city + (d.uf ? ' - ' + d.uf : '')].join(' — ')};
 }
 function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
-function onMapClick(lat, lng){
-  const e = {latlng:{lat, lng}};
-  if (movingId){ const it = S.items.find(x=>x.id===movingId); movingId = null; renderBanner();
-    if (it){ it.lat = e.latlng.lat; it.lng = e.latlng.lng; it.precision = 'ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); }
-    return; }
-  if (pendingManual !== null){ const q=pendingManual; pendingManual=null; pick(q, e.latlng.lat, e.latlng.lng, q); renderBanner(); return; }
-  if (mode==='center'){ pick('Ponto no mapa', e.latlng.lat, e.latlng.lng, 'Ponto marcado no mapa'); }
-}
-function pick(q, lat, lng, display, extra={}){
+map.on('click', e => {
+  const {lat, lng} = e.latlng;
+  if (pendingManual !== null){ const q = pendingManual; pendingManual = null; pick(q, lat, lng, q); renderBanner(); return; }
+  if (mode==='center') pick('Ponto no mapa', lat, lng, 'Ponto marcado no mapa');
+});
+function pick(q, lat, lng, display){
   $('#results').innerHTML=''; $('#q').value='';
   if (mode==='center'){
     S.center = {lat, lng, label: display}; save(); drawCircle(); renderAll();
-    map && map.fitCircle(); setMode('add'); toast('Centro do círculo definido');
+    map.fitBounds(circle.getBounds(), {padding:[20,20]}); setMode('add'); toast('Centro do círculo definido');
     return;
   }
-  const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, precision:extra.precision||'manual', cep:extra.cep||null, answers:{}, notes:'', link:'', createdAt:Date.now()};
-  S.items.push(it); save(); renderAll(); map && map.setView([lat,lng], Math.max(map.getZoom(),16));
-  if (it.precision==='rua') toast('Número não encontrado: pino no trecho da rua. Arraste ou cole as coordenadas.');
-  else if (it.precision==='cep') toast('Posição pelo CEP '+it.cep+'. Arraste se precisar.');
+  const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, answers:{}, notes:'', createdAt:Date.now()};
+  S.items.push(it); save(); renderAll();
+  map.setView([lat,lng], Math.max(map.getZoom(),16));
   startWizard(it.id, 0);
 }
 
@@ -625,7 +479,7 @@ function openDetail(id){
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
     <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
-    <div class="sub">${esc(it.address)}${it.cep?' · CEP '+esc(it.cep):''}<br>${esc({numero:'Posição exata do número', cep:'Posição aproximada pelo CEP do trecho', rua:'Posição aproximada (meio da rua) — arraste o pino', ajustado:'Posição ajustada à mão', coord:'Posição pelas coordenadas coladas (exata)', manual:'Marcado no mapa', local:''}[it.precision]||'')}</div>
+    <div class="sub">${esc(it.address)}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
@@ -641,7 +495,7 @@ function openDetail(id){
       <button class="btn" type="submit">Buscar</button>
     </form>
     <div id="addrResults"></div>
-    <div class="hint">Mude o texto (ou cole as coordenadas do Google Maps) e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
+    <div class="hint">Cole as coordenadas (ou mude o texto) e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
     <div class="section-title">Anotações</div>
     <textarea id="notes" placeholder="Link do anúncio, telefone, impressões da visita…">${esc(it.notes)}</textarea>
     <div class="actions">
@@ -659,25 +513,23 @@ function openDetail(id){
     const keepText = () => { it.address = q; it.query = q; save(); renderAll(); openDetail(id); toast('Endereço atualizado'); };
     const c = parseCoords(q);
     if (c){ const label = await reverseLabel(c.lat, c.lng);
-      Object.assign(it, {lat:c.lat, lng:c.lng, address:label, precision:'coord', cep:null});
-      save(); renderAll(); map && map.setView([c.lat,c.lng], 17); openDetail(id); toast(`#${it.num} reposicionado`); return; }
+      Object.assign(it, {lat:c.lat, lng:c.lng, address:label});
+      save(); renderAll(); map.setView([c.lat,c.lng], 17); openDetail(id); toast(`#${it.num} reposicionado`); return; }
     let data;
     try{ data = await geocode(q); }
     catch(err){ box.innerHTML = `<div class="banner"><span>A busca falhou.</span><button class="btn" type="button" id="keepTxt">Só salvar o texto</button></div>`; $('#keepTxt').onclick = keepText; return; }
     box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.label)}</button>`).join('') +
-      `<button type="button" data-keep="1" style="color:var(--muted)">Só salvar o texto, sem mover o pino</button>` +
-      `<button type="button" data-tap="1" style="color:var(--muted)">Marcar a posição tocando no mapa</button></div>`;
+      `<button type="button" data-keep="1" style="color:var(--muted)">Só salvar o texto, sem mover o pino</button></div>`;
     box.querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
-      const r = await resolveResult(data[+b.dataset.i], box);
-      Object.assign(it, {lat:r.lat, lng:r.lon, address:r.label, query:q, precision:r.precision, cep:r.cep});
-      save(); renderAll(); map && map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
+      const r = await resolveResult(data[+b.dataset.i]);
+      Object.assign(it, {lat:r.lat, lng:r.lon, address:r.label, query:q});
+      save(); renderAll(); map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
     });
     box.querySelector('[data-keep]').onclick = keepText;
-    box.querySelector('[data-tap]').onclick = () => { it.address = q; it.query = q; save(); closeSheet(); movingId = id; renderBanner(); };
   };
   $('#notes').oninput = e => { it.notes = e.target.value; clearTimeout(openDetail._t); openDetail._t = setTimeout(save, 400); };
   $('#redo').onclick = () => { if (st!=='pending'){ it.answers = {}; save(); renderAll(); } renderStep(id, 0); };
-  $('#locate').onclick = () => { closeSheet(); map && map.setView([it.lat,it.lng], 17); };
+  $('#locate').onclick = () => { closeSheet(); map.setView([it.lat,it.lng], 17); };
   $('#del').onclick = () => {
     const b = $('#del');
     if (b.dataset.armed){ const n = it.num; removeItem(id); closeSheet(); toast(`#${n} excluído — numeração refeita`); }
@@ -719,7 +571,7 @@ function renderList(){
       else { box.querySelectorAll('.del.armed').forEach(x=>{x.classList.remove('armed'); x.textContent='✕';}); del.classList.add('armed'); del.textContent='Excluir?'; }
       return;
     }
-    const it=S.items.find(x=>x.id===c.dataset.id); map && map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id);
+    const it=S.items.find(x=>x.id===c.dataset.id); map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id);
   });
   const n = S.items.length, nd = disq.length;
   $('#listTitle').textContent = `Imóveis (${n}${nd?` · ${nd} desclassificado${nd>1?'s':''}`:''})`;
@@ -731,7 +583,7 @@ function renderCircleSettings(){
   $('#radius').value = S.radius; $('#radiusRange').value = Math.min(10000, S.radius);
   $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + ' (arraste o ponto preto para ajustar)' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
 }
-function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(map) map.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
+function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(circle) circle.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
 $('#radiusRange').oninput = e => { $('#radius').value = e.target.value; setRadius(e.target.value); };
 $('#radius').onchange = e => { setRadius(e.target.value); $('#radiusRange').value = Math.min(10000,S.radius); };
 
@@ -751,20 +603,6 @@ function renderWeights(){
 }
 $('#resetWeights').onclick = () => { S.W = structuredClone(DEFAULT_W); save(); renderWeights(); renderAll(false); toast('Pesos restaurados'); };
 
-/* ---------- chave do Google ---------- */
-function renderKeyBox(){
-  const key = getKey(), on = map && map.kind === 'google';
-  $('#keyBox').innerHTML = `
-    <div class="hint">${on ? 'Usando Google Maps: mapa e busca com número de porta.' : key ? 'Chave salva, mas o Google não está ativo.' : 'Sem chave: usando OpenStreetMap, que no Brasil erra bastante a posição pelo número.'}</div>
-    <label for="gkey">Chave da API do Google Maps</label>
-    <div class="row"><input id="gkey" type="password" autocomplete="off" placeholder="AIza…" value="${esc(key)}" style="flex:1;min-width:0;padding:9px;border:1px solid var(--line);border-radius:8px">
-      <button class="btn primary" type="button" id="saveKey">Salvar</button></div>
-    ${key ? '<div class="actions"><button class="btn ghost" type="button" id="dropKey">Remover chave e voltar ao OpenStreetMap</button></div>' : ''}
-    <div class="hint">No Google Cloud, ative <b>Maps JavaScript API</b> e <b>Geocoding API</b> e restrinja a chave ao site ${esc(location.origin)}/*. A chave fica só neste navegador e não vai no backup.</div>`;
-  $('#saveKey').onclick = () => { const v = $('#gkey').value.trim(); try{ v ? localStorage.setItem(GKEY, v) : localStorage.removeItem(GKEY); }catch(e){} location.reload(); };
-  const d = $('#dropKey'); if (d) d.onclick = () => { try{ localStorage.removeItem(GKEY); }catch(e){} location.reload(); };
-}
-
 /* ---------- backup ---------- */
 $('#exportBtn').onclick = () => {
   const blob = new Blob([JSON.stringify(S,null,2)], {type:'application/json'});
@@ -783,14 +621,10 @@ $('#importFile').onchange = async e => {
 /* ---------- render ---------- */
 function renderBanner(){
   let h = '';
-  const mv = movingId && S.items.find(x=>x.id===movingId);
-  if (mv) h = `<div class="banner"><span>Toque no mapa na nova posição do #${mv.num}.</span><button class="btn" type="button" id="cancelMove">Cancelar</button></div>`;
-  else if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
+  if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
   else if (mode==='center') h = `<div class="banner"><span>Busque o endereço do centro ou toque no mapa.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
-  else if (mapError) h = `<div class="banner"><span>${esc(mapError)}</span></div>`;
   else if (!saveOk) h = `<div class="banner"><span>Este navegador não está permitindo salvar. Use “Baixar backup”.</span></div>`;
   $('#banner').innerHTML = h;
-  const c0=$('#cancelMove'); if(c0) c0.onclick=()=>{movingId=null; renderBanner();};
   const c1=$('#cancelManual'); if(c1) c1.onclick=()=>{pendingManual=null; renderBanner();};
   const c2=$('#cancelCenter'); if(c2) c2.onclick=()=>setMode('add');
 }
@@ -799,19 +633,9 @@ function renderAll(redrawCircle=true){
   renderList(); drawMarkers(); renderCircleSettings();
 }
 
-renderWeights(); renderAll(); renderBanner(); renderKeyBox();
-(async () => {
-  const key = getKey();
-  if (key){
-    try{ await loadGoogle(key); map = await googleAdapter(); }
-    catch(e){ mapError = 'Google Maps não carregou ('+e.message+'). Usando OpenStreetMap.'; map = null; }
-  }
-  if (!map){ document.getElementById('map').innerHTML = ''; map = leafletAdapter(); }
-  map.onClick(onMapClick);
-  drawCircle(); renderAll(); renderBanner(); renderKeyBox();
-  const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
-  map.fitPoints(pts);
-})();
+drawCircle(); renderWeights(); renderAll(); renderBanner();
+{ const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
+  if (pts.length > 1) map.fitBounds(pts, {padding:[30,30], maxZoom:16}); else if (pts.length===1) map.setView(pts[0], 15); }
 </script>
 </body>
 </html>
