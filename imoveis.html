@@ -107,7 +107,7 @@
   <div id="map"></div>
   <div class="panel">
     <form class="row search" id="searchForm">
-      <input id="q" placeholder="Digite um endereço…" autocomplete="off" enterkeyhint="search">
+      <input id="q" placeholder="Endereço ou coordenadas…" autocomplete="off" enterkeyhint="search">
       <button class="btn primary" id="searchBtn">Buscar</button>
     </form>
     <div class="chips">
@@ -354,12 +354,18 @@ function drawMarkers(){
 /* ---------- busca ---------- */
 let mode = 'add', pendingManual = null, movingId = null;
 document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
-function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#q').placeholder = m==='center' ? 'Endereço do centro do círculo…' : 'Digite um endereço…'; $('#results').innerHTML=''; renderBanner(); }
+function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#q').placeholder = m==='center' ? 'Endereço do centro do círculo…' : 'Endereço ou coordenadas…'; $('#results').innerHTML=''; renderBanner(); }
 
 $('#searchForm').onsubmit = async e => {
   e.preventDefault();
   const q = $('#q').value.trim(); if(!q) return;
   $('#searchBtn').disabled = true; $('#results').innerHTML = '<div class="hint">Buscando…</div>';
+  const c = parseCoords(q);
+  if (c){
+    try{ const label = await reverseLabel(c.lat, c.lng); pick(q, c.lat, c.lng, label, {precision:'coord'}); }
+    finally{ $('#searchBtn').disabled = false; }
+    return;
+  }
   try{
     const data = await geocode(q);
     showResults(q, data);
@@ -368,6 +374,22 @@ $('#searchForm').onsubmit = async e => {
     $('#manualBtn').onclick = () => startManual(q);
   }finally{ $('#searchBtn').disabled = false; }
 };
+// coordenadas coladas do Google Maps ("-23.95512, -46.32211") ou link longo com @lat,lng / q=lat,lng
+function parseCoords(q){
+  const m = q.match(/(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/);
+  if (!m) return null;
+  const lat = +m[1], lng = +m[2];
+  return (lat >= -35 && lat <= 6 && lng >= -75 && lng <= -33) ? {lat, lng} : null;
+}
+async function reverseLabel(lat, lng){
+  try{
+    const d = await withTimeout(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=pt-BR&lat=${lat}&lon=${lng}`, 6000);
+    const a = d.address || {};
+    const road = a.road || a.pedestrian, sub = a.suburb || a.neighbourhood || a.city_district, city = a.city || a.town || a.municipality;
+    if (road) return [road + (a.house_number ? ', ' + a.house_number : ''), sub, city].filter(Boolean).join(' — ');
+  }catch(e){}
+  return `Ponto ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
 async function withTimeout(url, ms=8000){
   const c = new AbortController(); const t = setTimeout(()=>c.abort(), ms);
   try{ const r = await fetch(url, {signal:c.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
@@ -425,17 +447,23 @@ async function geocodeOSM(q){
     }catch(e){ errs.push('Photon: '+errMsg(e)); }
   }
   if (!list.length && errs.length) throw new Error(errs.join(' · '));
-  const seen = new Set(), out = [];
+  // Uma rua longa vem picada em trechos (um por bairro/CEP). Sem número exato no OSM, o bairro de cada trecho
+  // não diz nada sobre o número digitado: junta todos os trechos da mesma rua num resultado só e
+  // descobre o bairro certo depois, pela faixa de numeração do CEP.
+  const groups = new Map(), out = [];
   for (const r of list){
-    const k = norm([r.road, r.hn, r.suburb, r.city].join('|'));
-    if (seen.has(k)) continue; seen.add(k);
-    const n = r.hn || num;
-    r.label = [r.road ? r.road + (n ? ', ' + n : '') : null, r.suburb, r.city ? r.city + (r.uf ? ' - ' + r.uf : '') : null].filter(Boolean).join(' — ');
+    const approx = num && !r.hn;
+    const k = norm(approx ? [r.road, r.city].join('|') : [r.road, r.hn, r.suburb, r.city].join('|'));
+    if (groups.has(k)){ groups.get(k).segments.push({lat:r.lat, lon:r.lon, suburb:r.suburb}); continue; }
+    r.segments = [{lat:r.lat, lon:r.lon, suburb:r.suburb}];
     r.num = num; r.exact = !!r.hn;
-    out.push(r);
-    if (out.length >= 6) break;
+    groups.set(k, r); out.push(r);
   }
-  return out;
+  for (const r of out){
+    const n = r.hn || r.num, showSub = r.exact || r.segments.length === 1 || !r.num;
+    r.label = [r.road ? r.road + (n ? ', ' + n : '') : null, showSub ? r.suburb : null, r.city ? r.city + (r.uf ? ' - ' + r.uf : '') : null].filter(Boolean).join(' — ');
+  }
+  return out.slice(0, 6);
 }
 
 // OpenStreetMap quase não tem numeração no Brasil: acha o CEP do trecho pelo número (ViaCEP) e pega a coordenada do CEP
@@ -499,7 +527,20 @@ async function resolveResult(d, box){
   if (d.num && !d.exact){
     if (box) box.innerHTML = '<div class="hint">Localizando o número '+d.num+'…</div>';
     const ref = await refineByNumber(d);
-    if (ref){ cep = ref.cep; if (ref.lat && dist({lat:ref.lat,lng:ref.lon},{lat:d.lat,lng:d.lon}) <= 1200){ lat = ref.lat; lon = ref.lon; precision = 'cep'; } }
+    let label = d.label;
+    if (ref){
+      cep = ref.cep;
+      const segs = d.segments || [{lat:d.lat, lon:d.lon, suburb:d.suburb}];
+      // trecho da rua no bairro do CEP; se não houver, o trecho mais perto da coordenada do CEP
+      let seg = segs.find(x => ref.bairro && norm(x.suburb) === norm(ref.bairro));
+      if (!seg && ref.lat) seg = segs.reduce((b,x) => dist({lat:ref.lat,lng:ref.lon},{lat:x.lat,lng:x.lon}) < dist({lat:ref.lat,lng:ref.lon},{lat:b.lat,lng:b.lon}) ? x : b);
+      seg = seg || segs[0];
+      lat = seg.lat; lon = seg.lon;
+      // só aceita a coordenada do CEP se ela cair perto desse trecho da rua
+      if (ref.lat && dist({lat:ref.lat,lng:ref.lon},{lat:seg.lat,lng:seg.lon}) <= 800){ lat = ref.lat; lon = ref.lon; precision = 'cep'; }
+      if (ref.bairro) label = [d.road + ', ' + d.num, ref.bairro, d.city + (d.uf ? ' - ' + d.uf : '')].join(' — ');
+    }
+    return {lat, lon, label, precision, cep};
   }
   return {lat, lon, label:d.label, precision, cep};
 }
@@ -521,7 +562,7 @@ function pick(q, lat, lng, display, extra={}){
   }
   const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, precision:extra.precision||'manual', cep:extra.cep||null, answers:{}, notes:'', link:'', createdAt:Date.now()};
   S.items.push(it); save(); renderAll(); map && map.setView([lat,lng], Math.max(map.getZoom(),16));
-  if (it.precision==='rua') toast('Número não encontrado: pino no meio da rua. Arraste para ajustar.');
+  if (it.precision==='rua') toast('Número não encontrado: pino no trecho da rua. Arraste ou cole as coordenadas.');
   else if (it.precision==='cep') toast('Posição pelo CEP '+it.cep+'. Arraste se precisar.');
   startWizard(it.id, 0);
 }
@@ -584,7 +625,7 @@ function openDetail(id){
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
     <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
-    <div class="sub">${esc(it.address)}${it.cep?' · CEP '+esc(it.cep):''}<br>${esc({numero:'Posição exata do número', cep:'Posição aproximada pelo CEP do trecho', rua:'Posição aproximada (meio da rua) — arraste o pino', ajustado:'Posição ajustada à mão', manual:'Marcado no mapa', local:''}[it.precision]||'')}</div>
+    <div class="sub">${esc(it.address)}${it.cep?' · CEP '+esc(it.cep):''}<br>${esc({numero:'Posição exata do número', cep:'Posição aproximada pelo CEP do trecho', rua:'Posição aproximada (meio da rua) — arraste o pino', ajustado:'Posição ajustada à mão', coord:'Posição pelas coordenadas coladas (exata)', manual:'Marcado no mapa', local:''}[it.precision]||'')}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
@@ -600,7 +641,7 @@ function openDetail(id){
       <button class="btn" type="submit">Buscar</button>
     </form>
     <div id="addrResults"></div>
-    <div class="hint">Mude o texto e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
+    <div class="hint">Mude o texto (ou cole as coordenadas do Google Maps) e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
     <div class="section-title">Anotações</div>
     <textarea id="notes" placeholder="Link do anúncio, telefone, impressões da visita…">${esc(it.notes)}</textarea>
     <div class="actions">
@@ -616,6 +657,10 @@ function openDetail(id){
     const q = $('#addrInput').value.trim(); if (!q) return;
     const box = $('#addrResults'); box.innerHTML = '<div class="hint">Buscando…</div>';
     const keepText = () => { it.address = q; it.query = q; save(); renderAll(); openDetail(id); toast('Endereço atualizado'); };
+    const c = parseCoords(q);
+    if (c){ const label = await reverseLabel(c.lat, c.lng);
+      Object.assign(it, {lat:c.lat, lng:c.lng, address:label, precision:'coord', cep:null});
+      save(); renderAll(); map && map.setView([c.lat,c.lng], 17); openDetail(id); toast(`#${it.num} reposicionado`); return; }
     let data;
     try{ data = await geocode(q); }
     catch(err){ box.innerHTML = `<div class="banner"><span>A busca falhou.</span><button class="btn" type="button" id="keepTxt">Só salvar o texto</button></div>`; $('#keepTxt').onclick = keepText; return; }
