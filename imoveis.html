@@ -35,6 +35,7 @@
   .btn:disabled{opacity:.5}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px}
   .chip{font-size:13px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#fff}
+  .chip.icon{padding:8px 16px;line-height:0}
   .chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   .section-title{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}
   .results{margin-top:8px;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}
@@ -100,6 +101,10 @@
   .refrow .dot{flex:none;width:14px;height:14px;border-radius:50%;background:#e0201b}
   .refrow input{flex:1;min-width:0;border:0;padding:6px 0;background:transparent;font-weight:600}
   .refrow small{color:var(--muted);white-space:nowrap}
+  a.btn{text-decoration:none;color:inherit;display:inline-block}
+  .bgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  select.field{appearance:auto}
+  .refrow input[type=tel]{display:block}
   .field{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
   textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -119,9 +124,9 @@
       <button class="btn primary" id="searchBtn">Buscar</button>
     </form>
     <div class="chips">
-      <button class="chip on" data-mode="add" type="button">Adicionar imóvel</button>
-      <button class="chip" data-mode="center" type="button">Definir centro do círculo</button>
-      <button class="chip" data-mode="ref" type="button">Ponto de referência</button>
+      <button class="chip icon on" data-mode="add" type="button" aria-label="Adicionar imóvel" title="Adicionar imóvel"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M10 20v-6h4v6"/></svg></button>
+      <button class="chip icon" data-mode="center" type="button" aria-label="Definir centro do círculo" title="Definir centro do círculo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg></button>
+      <button class="chip icon" data-mode="ref" type="button" aria-label="Ponto de referência" title="Ponto de referência"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" fill="#e0201b" stroke="#e0201b"/><circle cx="12" cy="9.5" r="2.5" fill="#fff" stroke="none"/></svg></button>
     </div>
     <div id="results"></div>
     <div id="banner"></div>
@@ -135,12 +140,15 @@
     </div>
     <div id="list"></div>
 
+    <div class="section-title">Corretores</div>
+    <div id="brokers"></div>
+
     <div class="section-title">Pontos de referência</div>
     <div id="refs"></div>
 
     <div class="section-title">Círculo</div>
     <div class="settings">
-      <div class="hint" id="centerInfo">Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.</div>
+      <div class="hint" id="centerInfo">Sem centro definido. Toque no ícone do círculo e cole as coordenadas, busque um endereço ou toque no mapa.</div>
       <label for="radius">Raio (metros)</label>
       <div class="row">
         <input type="range" id="radiusRange" min="200" max="10000" step="50" style="flex:1">
@@ -186,7 +194,7 @@ const DQ = [
 ];
 // ordem de pergunta = ordem da lista (maior peso primeiro). "circulo" é calculado pelo mapa.
 const POS = [
-  {key:'circulo', label:'Dentro do círculo', auto:true},
+  {key:'circulo', label:'Distância da orla', auto:true},
   {key:'valor', label:'Valor', q:'Qual o valor total?', choices:[
     {v:'5k', t:'Até R$ 5 mil'}, {v:'6k', t:'Até R$ 6 mil'}, {v:'7k', t:'Até R$ 7 mil'}, {v:'mais', t:'Acima de R$ 7 mil'}]},
   {key:'metragem', label:'Metragem', q:'Qual a metragem?', choices:[
@@ -206,8 +214,10 @@ const NEG = [
   {key:'andarBaixo', label:'Andar baixo', q:'O andar é baixo?'},
   {key:'movimentada', label:'Frente p/ rua movimentada', q:'É de frente para rua movimentada?'},
 ];
+// faixas da distância até o centro do círculo, em % do raio
+const ORLA = [{v:'25', t:'até 25% do raio'}, {v:'50', t:'25 a 50% do raio'}, {v:'75', t:'50 a 75% do raio'}, {v:'100', t:'75 a 100% do raio'}];
 const DEFAULT_W = {
-  circulo:11,
+  circulo:{'25':11,'50':8,'75':6,'100':3},
   valor:{'5k':10,'6k':7,'7k':3,'mais':0},
   metragem:{'135':9,'120':5,'menos':0},
   vaga:8, portaria:7, armario:6, varanda:5, bicicletario:4, split:3, elevador:2, v110:1,
@@ -221,10 +231,16 @@ let S = load();
 function renumber(){ S.items.sort((a,b)=>a.num-b.num).forEach((it,i)=>it.num=i+1); S.nextNum = S.items.length+1; }
 function removeItem(id){ const it = S.items.find(x=>x.id===id); S.items = S.items.filter(x=>x.id!==id); renumber(); save(); renderAll(); return it; }
 renumber();
-function blank(){ return {center:null, radius:1500, items:[], refs:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
+function blank(){ return {center:null, radius:1500, items:[], refs:[], brokers:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
 function load(){
-  try{ const raw = localStorage.getItem(KEY); if(raw){ const d = JSON.parse(raw); return Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); } }catch(e){}
+  try{ const raw = localStorage.getItem(KEY); if(raw) return hydrate(JSON.parse(raw)); }catch(e){}
   return blank();
+}
+// completa dados salvos por versões antigas (ex.: círculo valia um número só)
+function hydrate(d){
+  const W = Object.assign(structuredClone(DEFAULT_W), d.W||{});
+  if (typeof W.circulo === 'number'){ const n = W.circulo; W.circulo = {'25':n, '50':Math.round(n*.75), '75':Math.round(n*.5), '100':Math.round(n*.25)}; }
+  return Object.assign(blank(), d, {W, refs:d.refs||[], brokers:d.brokers||[]});
 }
 let saveOk = true;
 function save(){
@@ -240,6 +256,9 @@ function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('sh
 function dist(a,b){ const R=6371000, r=Math.PI/180; const dLat=(b.lat-a.lat)*r, dLng=(b.lng-a.lng)*r;
   const h=Math.sin(dLat/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
 function inside(it){ return S.center ? dist(S.center, it) <= S.radius : null; }
+function orlaFrac(it){ return S.center ? dist(S.center, it) / S.radius : null; }
+function orlaTier(it){ const f = orlaFrac(it); if (f === null) return null; return f<=.25?'25':f<=.5?'50':f<=.75?'75':f<=1?'100':'fora'; }
+function orlaTxt(it){ const f = orlaFrac(it); if (f === null) return 'sem círculo'; return fmtDist(dist(S.center,it)) + (f<=1 ? ' · ' + Math.round(f*100) + '% do raio' : ' · fora do círculo'); }
 function fmtDist(m){ return m>=1000 ? (m/1000).toFixed(1).replace('.',',')+' km' : Math.round(m)+' m'; }
 function shortAddr(d){ return d.split(',').slice(0,3).join(',').trim(); }
 
@@ -254,8 +273,8 @@ function status(it){
 }
 function breakdown(it){
   const a = it.answers||{}, W = S.W, rows = [];
-  const ins = inside(it);
-  rows.push({key:'circulo', label:'Dentro do círculo', val: ins===null?'sem círculo':(ins?'Sim':'Não'), pts: ins?W.circulo:0, unk: ins===null});
+  const tier = orlaTier(it);
+  rows.push({key:'circulo', label:'Distância da orla', val: orlaTxt(it), pts: tier ? (W.circulo[tier]||0) : 0, unk: tier===null});
   for (const p of POS.filter(p=>!p.auto)){
     const v = a[p.key];
     if (p.choices){
@@ -272,7 +291,7 @@ function breakdown(it){
   return rows;
 }
 function score(it){ return status(it)==='disq' ? null : breakdown(it).reduce((s,r)=>s+r.pts,0); }
-function maxScore(){ const W=S.W; return W.circulo+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
+function maxScore(){ const W=S.W; return Math.max(...Object.values(W.circulo))+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
 function disqReason(it){ const a=it.answers||{}; return DQ.filter(d=>a[d.key]===false).map(d=>d.reason).join(' · '); }
 
 /* ---------- mapa ---------- */
@@ -300,7 +319,7 @@ function drawMarkers(){
 /* ---------- busca ---------- */
 let mode = 'add', pendingManual = null;
 document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
-function setMode(m){ mode=m; pendingManual=null; $('#q').placeholder = m==='ref' ? 'Coordenadas ou endereço do ponto de referência' : m==='center' ? 'Coordenadas ou endereço do centro' : 'Coordenadas ou endereço'; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#results').innerHTML=''; renderBanner(); }
+function setMode(m){ mode=m; pendingManual=null;  document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#results').innerHTML=''; renderBanner(); }
 
 // Coordenadas coladas ("-23.95512, -46.32211") vão direto para o ponto exato; texto vai para a busca do OpenStreetMap.
 $('#searchForm').onsubmit = async e => {
@@ -469,7 +488,7 @@ function drawRefs(){
 }
 function renderRefs(){
   const box = $('#refs');
-  if (!S.refs.length){ box.innerHTML = '<div class="empty" style="padding:8px">Nenhum ainda. Toque em “Ponto de referência” e cole as coordenadas, busque o endereço ou toque no mapa.</div>'; return; }
+  if (!S.refs.length){ box.innerHTML = '<div class="empty" style="padding:8px">Nenhum ainda. Toque no pino vermelho e cole as coordenadas, busque o endereço ou toque no mapa.</div>'; return; }
   box.innerHTML = S.refs.map(r => `<div class="refrow" data-id="${r.id}">
       <span class="dot"></span>
       <input value="${esc(r.name)}" aria-label="Nome do ponto" enterkeyhint="done">
@@ -564,13 +583,14 @@ function renderStep(id, i){
 /* ---------- detalhe ---------- */
 function openDetail(id){
   const it = S.items.find(x=>x.id===id); if(!it) return;
+  const keepScroll = openDetail._id === id && $('#scrim').classList.contains('open') ? $('#sheet').scrollTop : 0; openDetail._id = id;
   const st = status(it), sc = score(it), rows = breakdown(it), ST = steps();
   const ranked = rankedList(); const pos = ranked.findIndex(x=>x.id===id);
   const dqRows = DQ.map(d=>{ const v=it.answers[d.key]; return {key:d.key, label:d.q, val:v===true?'Sim':v===false?'Não':'—', bad:v===false, unk:v==null}; });
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
     <h2 id="detTitle">#${it.num} ${esc(it.address)}</h2>
-    <div class="sub">${S.center ? (inside(it) ? 'Dentro' : 'Fora') + ' do círculo · ' + fmtDist(dist(S.center, it)) + ' do centro' : 'Sem círculo definido'}${S.refs.length ? '<br>' + refDistances(it).map(r => esc(r.name) + ': ' + fmtDist(r.d)).join(' · ') : ''}</div>
+    <div class="sub">${S.center ? 'Orla: ' + orlaTxt(it) : 'Sem círculo definido'}${S.refs.length ? '<br>' + refDistances(it).map(r => esc(r.name) + ': ' + fmtDist(r.d)).join(' · ') : ''}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
@@ -583,10 +603,11 @@ function openDetail(id){
     <div class="section-title">Endereço</div>
     <input id="addrText" class="field" value="${esc(it.address)}" autocomplete="off" enterkeyhint="done">
     <div class="hint">Edite à vontade (número, complemento). Salva sozinho e não mexe no pino.</div>
+    ${brokerHtml(it)}
     <div class="section-title">Posição do pino</div>
     <div class="row" style="justify-content:space-between;margin-bottom:8px"><span>Coordenadas: <b id="coordTxt">${it.lat.toFixed(6).replace('.',',')}, ${it.lng.toFixed(6).replace('.',',')}</b></span></div>
     <form id="moveForm" class="row search">
-      <input id="moveInput" placeholder="Cole novas coordenadas para mover" autocomplete="off" enterkeyhint="go">
+      <input id="moveInput" placeholder="Novas coordenadas" autocomplete="off" enterkeyhint="go">
       <button class="btn" type="submit">Mover</button>
     </form>
     <div id="moveMsg"></div>
@@ -606,6 +627,7 @@ function openDetail(id){
     clearTimeout(openDetail._a); openDetail._a = setTimeout(() => { save(); renderList(); }, 400);
   };
   $('#addrText').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
+  bindBroker(it);
   $('#moveForm').onsubmit = e => {
     e.preventDefault();
     const c = parseCoords($('#moveInput').value);
@@ -621,10 +643,97 @@ function openDetail(id){
     else { b.dataset.armed = 1; b.textContent = 'Toque de novo para excluir'; }
   };
   $('#close').onclick = closeSheet;
-  openSheet();
+  openSheet(); $('#sheet').scrollTop = keepScroll;
 }
+/* ---------- corretores ---------- */
+function brokerOf(it){ return S.brokers.find(b => b.id === it.brokerId) || null; }
+function phoneDigits(p){ return String(p||'').replace(/\D/g,'').replace(/^0+/,''); }
+function phoneLinks(p){
+  const d = phoneDigits(p); if (d.length < 10) return '';
+  const intl = d.length <= 11 ? '55' + d : d;
+  return `<a class="btn" href="tel:+${intl}">Ligar</a><a class="btn" href="https://wa.me/${intl}" target="_blank" rel="noopener">WhatsApp</a>`;
+}
+function brokerHtml(it){
+  const b = brokerOf(it);
+  const others = b ? S.items.filter(x => x.brokerId === b.id && x.id !== it.id).map(x => '#' + x.num) : [];
+  return `<div class="section-title">Corretor</div>
+    <select id="brokerSel" class="field">
+      <option value="">— sem corretor —</option>
+      ${S.brokers.map(x => `<option value="${x.id}" ${x.id === it.brokerId ? 'selected' : ''}>${esc(x.name || '(sem nome)')}${x.phone ? ' · ' + esc(x.phone) : ''}</option>`).join('')}
+      <option value="__new">+ Novo corretor</option>
+    </select>
+    ${b ? `<div class="bgrid">
+        <input id="bName" class="field" placeholder="Nome" value="${esc(b.name)}" autocomplete="off" enterkeyhint="next">
+        <input id="bPhone" class="field" type="tel" placeholder="Telefone" value="${esc(b.phone)}" autocomplete="off" enterkeyhint="done">
+      </div>
+      <div class="actions" id="bLinks">${phoneLinks(b.phone)}</div>
+      <div class="hint" id="bHint">${others.length ? 'Também cuida de ' + others.join(', ') + '. ' : ''}Mudar nome ou telefone aqui muda em todos os imóveis dele.</div>` : ''}`;
+}
+function bindBroker(it){
+  const sel = $('#brokerSel');
+  sel.onchange = () => {
+    if (sel.value === '__new'){
+      const b = {id:String(Date.now()+Math.random()), name:'', phone:''};
+      S.brokers.push(b); it.brokerId = b.id;
+      save(); openDetail(it.id); renderList(); renderBrokers(); $('#bName').focus(); return;
+    }
+    it.brokerId = sel.value || null; save(); openDetail(it.id); renderList(); renderBrokers();
+  };
+  const b = brokerOf(it); if (!b) return;
+  const refresh = () => {
+    const opt = sel.querySelector(`option[value="${b.id}"]`);
+    if (opt) opt.textContent = (b.name || '(sem nome)') + (b.phone ? ' · ' + b.phone : '');
+    $('#bLinks').innerHTML = phoneLinks(b.phone);
+    const dup = phoneDigits(b.phone).length >= 10 && S.brokers.find(x => x.id !== b.id && phoneDigits(x.phone) === phoneDigits(b.phone));
+    const others = S.items.filter(x => x.brokerId === b.id && x.id !== it.id).map(x => '#' + x.num);
+    $('#bHint').innerHTML = dup ? `<span style="color:var(--bad)">${esc(dup.name || 'Outro corretor')} já tem esse telefone. Escolha ele na lista acima em vez de criar outro.</span>`
+      : (others.length ? 'Também cuida de ' + others.join(', ') + '. ' : '') + 'Mudar nome ou telefone aqui muda em todos os imóveis dele.';
+    clearTimeout(bindBroker._t); bindBroker._t = setTimeout(() => { save(); renderList(); renderBrokers(); }, 400);
+  };
+  $('#bName').oninput = e => { b.name = e.target.value.trim(); refresh(); };
+  $('#bPhone').oninput = e => { b.phone = e.target.value.trim(); refresh(); };
+  $('#bName').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); $('#bPhone').focus(); } };
+  $('#bPhone').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
+}
+// corretor criado e deixado em branco some ao fechar
+function dropEmptyBrokers(){
+  const empty = S.brokers.filter(b => !b.name && !b.phone).map(b => b.id);
+  if (!empty.length) return;
+  S.brokers = S.brokers.filter(b => !empty.includes(b.id));
+  S.items.forEach(it => { if (empty.includes(it.brokerId)) it.brokerId = null; });
+}
+function renderBrokers(){
+  const box = $('#brokers');
+  const list = S.brokers.filter(b => b.name || b.phone);
+  if (!list.length){ box.innerHTML = '<div class="empty" style="padding:8px">Nenhum ainda. Abra um imóvel e escolha “+ Novo corretor”.</div>'; return; }
+  box.innerHTML = list.map(b => {
+    const its = S.items.filter(x => x.brokerId === b.id).sort((x,y) => x.num - y.num);
+    return `<div class="refrow" data-id="${b.id}">
+      <div style="flex:1;min-width:0">
+        <input data-f="name" value="${esc(b.name)}" placeholder="Nome" aria-label="Nome do corretor" enterkeyhint="done">
+        <input data-f="phone" type="tel" value="${esc(b.phone)}" placeholder="Telefone" aria-label="Telefone" enterkeyhint="done" style="font-weight:400">
+        <small>${its.length ? 'Imóveis ' + its.map(x => '#' + x.num).join(', ') : 'Nenhum imóvel'}</small>
+      </div>
+      <div class="actions" style="margin:0;flex-direction:column;align-items:flex-end">${phoneLinks(b.phone).replace(/class="btn"/g, 'class="btn" style="padding:6px 10px;font-size:13px"')}</div>
+      <button class="del" type="button" aria-label="Excluir corretor">✕</button>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.refrow').forEach(row => {
+    const b = S.brokers.find(x => x.id === row.dataset.id), del = row.querySelector('.del');
+    row.querySelectorAll('input').forEach(inp => {
+      inp.oninput = () => { b[inp.dataset.f] = inp.value.trim(); clearTimeout(renderBrokers._t); renderBrokers._t = setTimeout(() => { save(); renderList(); }, 400); };
+      inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
+      inp.onblur = () => renderBrokers();
+    });
+    del.onclick = () => {
+      if (del.classList.contains('armed')){ S.items.forEach(it => { if (it.brokerId === b.id) it.brokerId = null; }); S.brokers = S.brokers.filter(x => x.id !== b.id); save(); renderAll(); toast('Corretor removido'); }
+      else { del.classList.add('armed'); del.textContent = 'Excluir?'; }
+    };
+  });
+}
+
 function openSheet(){ $('#scrim').classList.add('open'); }
-function closeSheet(){ $('#scrim').classList.remove('open'); save(); }
+function closeSheet(){ $('#scrim').classList.remove('open'); dropEmptyBrokers(); save(); renderAll(); }
 $('#scrim').onclick = e => { if (e.target.id==='scrim') closeSheet(); };
 
 /* ---------- lista ---------- */
@@ -640,7 +749,7 @@ function renderList(){
   box.innerHTML = order.map(it => {
     const st = status(it), sc = score(it), ins = inside(it), r = ranked.findIndex(x=>x.id===it.id);
     const meta = st==='disq' ? esc(disqReason(it))
-      : [ins===null?null:(ins?'Dentro do círculo':'Fora do círculo')+' · '+fmtDist(dist(S.center,it)), st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
+      : [ins===null?null:orlaTxt(it), brokerOf(it)?.name || null, st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
     return `<div class="card ${st==='disq'?'disq':''}" role="button" tabindex="0" data-id="${it.id}">
       <div class="num ${st}">${it.num}</div>
       <div class="body"><div class="addr">${esc(shortAddr(it.address))}</div><div class="meta">${meta}</div></div>
@@ -666,7 +775,7 @@ document.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { S.sort
 /* ---------- círculo / pesos ---------- */
 function renderCircleSettings(){
   $('#radius').value = S.radius; $('#radiusRange').value = Math.min(10000, S.radius);
-  $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + '' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
+  $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + '' : 'Sem centro definido. Toque no ícone do círculo e cole as coordenadas, busque um endereço ou toque no mapa.';
 }
 function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(circle) circle.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
 $('#radiusRange').oninput = e => { $('#radius').value = e.target.value; setRadius(e.target.value); };
@@ -676,7 +785,7 @@ function renderWeights(){
   const W = S.W;
   const line = (label, path) => `<span>${esc(label)}</span><input type="number" step="1" data-w="${path}" value="${path.split('.').reduce((o,k)=>o[k],W)}">`;
   let h = '<div class="wgrid">';
-  h += line('Dentro do círculo','circulo');
+  ORLA.forEach(t => h += line(`Distância da orla: ${t.t}`, `circulo.${t.v}`));
   POS.filter(p=>!p.auto).forEach(p => { if(p.choices) p.choices.forEach(c=>h+=line(`${p.label}: ${c.t}`, `${p.key}.${c.v}`)); else h+=line(p.label, p.key); });
   NEG.forEach(n => h += line(`${n.label} (desconta)`, n.key));
   h += '</div>';
@@ -698,7 +807,7 @@ $('#copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(J
 $('#importFile').onchange = async e => {
   const f = e.target.files[0]; if(!f) return;
   try{ const d = JSON.parse(await f.text()); if(!Array.isArray(d.items)) throw 0;
-    S = Object.assign(blank(), d, {W:Object.assign(structuredClone(DEFAULT_W), d.W||{})}); renumber(); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
+    S = hydrate(d); renumber(); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
   }catch(err){ toast('Arquivo inválido'); }
   e.target.value='';
 };
@@ -716,7 +825,7 @@ function renderBanner(){
 }
 function renderAll(redrawCircle=true){
   document.querySelectorAll('[data-sort]').forEach(b=>b.classList.toggle('on', b.dataset.sort===S.sort));
-  renderList(); drawMarkers(); drawRefs(); renderRefs(); renderCircleSettings();
+  renderList(); drawMarkers(); drawRefs(); renderRefs(); renderBrokers(); renderCircleSettings();
 }
 
 drawCircle(); renderWeights(); renderAll(); renderBanner();
