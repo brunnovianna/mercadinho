@@ -93,6 +93,7 @@
   .total{display:flex;justify-content:space-between;align-items:baseline;margin:8px 0 4px}
   .total b{font-size:30px}
   .disq-box{background:var(--bad-soft);color:var(--bad);border-radius:10px;padding:12px;margin:10px 0;font-weight:600}
+  .field{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
   textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   .pin{width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:grid;place-items:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -273,15 +274,13 @@ function drawCircle(){
   if (centerMarker){ map.removeLayer(centerMarker); centerMarker = null; }
   if (!S.center) return;
   circle = L.circle([S.center.lat,S.center.lng], {radius:S.radius, color:'#2f6f5e', weight:2, fillColor:'#2f6f5e', fillOpacity:.1, interactive:false}).addTo(map);
-  centerMarker = L.marker([S.center.lat,S.center.lng], {draggable:true, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map);
-  centerMarker.on('dragend', e => { const p = e.target.getLatLng(); S.center = {...S.center, lat:p.lat, lng:p.lng}; save(); drawCircle(); renderAll(); });
+  centerMarker = L.marker([S.center.lat,S.center.lng], {interactive:false, icon:L.divIcon({className:'', html:'<div class="center-dot"></div>', iconSize:[14,14], iconAnchor:[7,7]})}).addTo(map);
 }
 function drawMarkers(){
   markers.forEach(m => map.removeLayer(m));
   markers = S.items.map(it => {
-    const m = L.marker([it.lat,it.lng], {draggable:true, icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[status(it)]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
+    const m = L.marker([it.lat,it.lng], {icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[status(it)]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
     m.on('click', () => openDetail(it.id));
-    m.on('dragend', e => { const p = e.target.getLatLng(); it.lat = p.lat; it.lng = p.lng; save(); renderAll(); toast(`#${it.num} reposicionado`); });
     return m;
   });
 }
@@ -298,7 +297,7 @@ $('#searchForm').onsubmit = async e => {
   $('#searchBtn').disabled = true; $('#results').innerHTML = '<div class="hint">Buscando…</div>';
   try{
     const c = parseCoords(q);
-    if (c) return pick(q, c.lat, c.lng, await reverseLabel(c.lat, c.lng));
+    if (c){ if (mode==='center') return pick(q, c.lat, c.lng, await reverseLabel(c.lat, c.lng)); return confirmNew(q, c, await reverseLabel(c.lat, c.lng)); }
     showResults(q, await geocode(q));
   }catch(err){
     $('#results').innerHTML = `<div class="banner"><span>A busca falhou. Você pode marcar tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
@@ -412,6 +411,25 @@ async function resolveResult(d){
   const seg = d.segments.find(x => norm(x.suburb) === norm(bairro)) || d.segments[0];
   return {lat:seg.lat, lon:seg.lon, label:[d.road + ', ' + d.num, bairro, d.city + (d.uf ? ' - ' + d.uf : '')].join(' — ')};
 }
+// Antes de salvar um ponto colado, mostra o endereço achado para completar o número
+function confirmNew(q, c, label){
+  const near = S.items.find(it => dist(it, c) < 25);
+  const box = $('#results');
+  box.innerHTML = `<div class="settings">
+    <label for="newAddr" style="margin-top:0">Endereço deste ponto</label>
+    <input id="newAddr" class="field" value="${esc(label)}" autocomplete="off" enterkeyhint="done">
+    <div class="hint">O mapa não sabe o número do prédio: confira e complete antes de adicionar.</div>
+    ${near ? `<div class="hint" style="color:var(--bad)">Já existe o #${near.num} neste mesmo ponto (${esc(near.address)}).</div>` : ''}
+    <div class="actions"><button class="btn primary" type="button" id="addOk">Adicionar</button><button class="btn ghost" type="button" id="addCancel">Cancelar</button></div>
+  </div>`;
+  map.setView([c.lat, c.lng], 17);
+  const inp = $('#newAddr');
+  inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+  const go = () => pick(q, c.lat, c.lng, inp.value.trim() || label);
+  $('#addOk').onclick = go;
+  inp.onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); go(); } };
+  $('#addCancel').onclick = () => { box.innerHTML = ''; };
+}
 function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
 map.on('click', e => {
   const {lat, lng} = e.latlng;
@@ -488,8 +506,8 @@ function openDetail(id){
   const dqRows = DQ.map(d=>{ const v=it.answers[d.key]; return {key:d.key, label:d.q, val:v===true?'Sim':v===false?'Não':'—', bad:v===false, unk:v==null}; });
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
-    <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
-    <div class="sub">${esc(it.address)}</div>
+    <h2 id="detTitle">#${it.num} ${esc(it.address)}</h2>
+    <div class="sub">${S.center ? (inside(it) ? 'Dentro' : 'Fora') + ' do círculo · ' + fmtDist(dist(S.center, it)) + ' do centro' : 'Sem círculo definido'}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
@@ -500,45 +518,39 @@ function openDetail(id){
         ? `<span>${esc(r.label)} <small class="hint">(${esc(r.val)})</small></span><span class="${r.pts>0?'plus':'zero'}">${r.pts>0?'+'+r.pts:'0'}</span>`
         : `<button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)} <small class="${r.unk?'q-unk':'hint'}">(${esc(r.unk?'não respondido':r.val)})</small></span><span class="${r.pts>0?'plus':r.pts<0?'minus':'zero'}">${r.pts>0?'+'+r.pts:r.pts}</span></button>`}</div>`).join('')}</div>`}
     <div class="section-title">Endereço</div>
-    <form id="addrForm" class="row search">
-      <input id="addrInput" value="${esc(it.address)}" autocomplete="off" enterkeyhint="search">
-      <button class="btn" type="submit">Buscar</button>
+    <input id="addrText" class="field" value="${esc(it.address)}" autocomplete="off" enterkeyhint="done">
+    <div class="hint">Edite à vontade (número, complemento). Salva sozinho e não mexe no pino.</div>
+    <div class="section-title">Posição do pino</div>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px"><span>Coordenadas: <b id="coordTxt">${it.lat.toFixed(6).replace('.',',')}, ${it.lng.toFixed(6).replace('.',',')}</b></span></div>
+    <form id="moveForm" class="row search">
+      <input id="moveInput" placeholder="Cole novas coordenadas para mover" autocomplete="off" enterkeyhint="go">
+      <button class="btn" type="submit">Mover</button>
     </form>
-    <div id="addrResults"></div>
-    <div class="hint">Cole as coordenadas (ou mude o texto) e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
+    <div id="moveMsg"></div>
     <div class="section-title">Anotações</div>
     <textarea id="notes" placeholder="Link do anúncio, telefone, impressões da visita…">${esc(it.notes)}</textarea>
     <div class="actions">
-      <button class="btn primary" type="button" id="redo">${st==='pending'?'Responder questionário':'Refazer questionário'}</button>
+      <button class="btn primary" type="button" id="redo">${st==='pending'?'Responder questionário':'Revisar questionário'}</button>
       <button class="btn" type="button" id="locate">Ver no mapa</button>
       <button class="btn danger" type="button" id="del">Excluir</button>
       <button class="btn ghost" type="button" id="close" style="margin-left:auto">Fechar</button>
     </div>
-    <div class="hint" style="margin-top:10px">Toque em qualquer resposta para alterá-la. Para corrigir a posição, arraste o pino no mapa.</div>`;
+    <div class="hint" style="margin-top:10px">Toque em qualquer resposta para alterá-la.</div>`;
   $('#sheet').querySelectorAll('[data-step]').forEach(b => b.onclick = () => renderStep(id, +b.dataset.step));
-  $('#addrForm').onsubmit = async e => {
+  $('#addrText').oninput = e => {
+    it.address = e.target.value.trim() || it.address;
+    $('#detTitle').textContent = '#' + it.num + ' ' + it.address;
+    clearTimeout(openDetail._a); openDetail._a = setTimeout(() => { save(); renderList(); }, 400);
+  };
+  $('#addrText').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
+  $('#moveForm').onsubmit = e => {
     e.preventDefault();
-    const q = $('#addrInput').value.trim(); if (!q) return;
-    const box = $('#addrResults'); box.innerHTML = '<div class="hint">Buscando…</div>';
-    const keepText = () => { it.address = q; it.query = q; save(); renderAll(); openDetail(id); toast('Endereço atualizado'); };
-    const c = parseCoords(q);
-    if (c){ const label = await reverseLabel(c.lat, c.lng);
-      Object.assign(it, {lat:c.lat, lng:c.lng, address:label});
-      save(); renderAll(); map.setView([c.lat,c.lng], 17); openDetail(id); toast(`#${it.num} reposicionado`); return; }
-    let data;
-    try{ data = await geocode(q); }
-    catch(err){ box.innerHTML = `<div class="banner"><span>A busca falhou.</span><button class="btn" type="button" id="keepTxt">Só salvar o texto</button></div>`; $('#keepTxt').onclick = keepText; return; }
-    box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.label)}</button>`).join('') +
-      `<button type="button" data-keep="1" style="color:var(--muted)">Só salvar o texto, sem mover o pino</button></div>`;
-    box.querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
-      const r = await resolveResult(data[+b.dataset.i]);
-      Object.assign(it, {lat:r.lat, lng:r.lon, address:r.label, query:q});
-      save(); renderAll(); map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
-    });
-    box.querySelector('[data-keep]').onclick = keepText;
+    const c = parseCoords($('#moveInput').value);
+    if (!c){ $('#moveMsg').innerHTML = '<div class="hint" style="color:var(--bad)">Não reconheci essas coordenadas. Exemplo: -23,9707334, -46,3242166</div>'; return; }
+    it.lat = c.lat; it.lng = c.lng; save(); renderAll(); map.setView([c.lat,c.lng], 17); openDetail(id); toast(`#${it.num} movido`);
   };
   $('#notes').oninput = e => { it.notes = e.target.value; clearTimeout(openDetail._t); openDetail._t = setTimeout(save, 400); };
-  $('#redo').onclick = () => { if (st!=='pending'){ it.answers = {}; save(); renderAll(); } renderStep(id, 0); };
+  $('#redo').onclick = () => renderStep(id, 0);
   $('#locate').onclick = () => { closeSheet(); map.setView([it.lat,it.lng], 17); };
   $('#del').onclick = () => {
     const b = $('#del');
@@ -591,7 +603,7 @@ document.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { S.sort
 /* ---------- círculo / pesos ---------- */
 function renderCircleSettings(){
   $('#radius').value = S.radius; $('#radiusRange').value = Math.min(10000, S.radius);
-  $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + ' (arraste o ponto preto para ajustar)' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
+  $('#centerInfo').textContent = S.center ? 'Centro: ' + shortAddr(S.center.label) + '' : 'Sem centro definido. Use “Definir centro do círculo” e busque um endereço ou toque no mapa.';
 }
 function setRadius(v){ v = Math.max(50, Math.round(+v||0)); if(!v) return; S.radius=v; if(circle) circle.setRadius(v); renderAll(false); clearTimeout(setRadius._t); setRadius._t=setTimeout(save,300); }
 $('#radiusRange').oninput = e => { $('#radius').value = e.target.value; setRadius(e.target.value); };
