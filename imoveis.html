@@ -53,6 +53,9 @@
   .score b{font-size:20px;display:block;line-height:1}
   .score small{font-size:11px;color:var(--muted)}
   .rank{font-size:11px;color:var(--muted)}
+  .card{cursor:pointer}
+  .del{flex:none;border:0;background:transparent;color:var(--muted);font-size:15px;padding:8px;margin:-8px -6px -8px 0;border-radius:8px}
+  .del.armed{background:var(--bad);color:#fff;font-size:13px;padding:8px 10px}
   .empty{color:var(--muted);text-align:center;padding:24px 8px;font-size:14px}
   .settings{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px}
   .settings label{display:block;font-size:13px;color:var(--muted);margin:8px 0 4px}
@@ -276,13 +279,13 @@ function drawMarkers(){
     const st = status(it);
     const m = L.marker([it.lat,it.lng], {draggable:true, icon:L.divIcon({className:'', html:`<div class="pin" style="background:${COLORS[st]}"><span>${it.num}</span></div>`, iconSize:[30,30], iconAnchor:[15,30]})}).addTo(map);
     m.on('click', () => openDetail(it.id));
-    m.on('dragend', e => { const p=e.target.getLatLng(); it.lat=p.lat; it.lng=p.lng; save(); renderAll(); toast(`#${it.num} reposicionado`); });
+    m.on('dragend', e => { const p=e.target.getLatLng(); it.lat=p.lat; it.lng=p.lng; it.precision='ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); });
     markers[it.id] = m;
   }
 }
 
 /* ---------- busca ---------- */
-let mode = 'add', pendingManual = null;
+let mode = 'add', pendingManual = null, movingId = null;
 document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 function setMode(m){ mode=m; pendingManual=null; document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on', b.dataset.mode===m)); $('#q').placeholder = m==='center' ? 'Endereço do centro do círculo…' : 'Digite um endereço…'; $('#results').innerHTML=''; renderBanner(); }
 
@@ -303,21 +306,92 @@ async function withTimeout(url, ms=8000){
   try{ const r = await fetch(url, {signal:c.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
   finally{ clearTimeout(t); }
 }
-// Nominatim primeiro; se falhar ou vier vazio, tenta Photon (outro geocoder baseado em OpenStreetMap)
+const UF = {'Acre':'AC','Alagoas':'AL','Amapá':'AP','Amazonas':'AM','Bahia':'BA','Ceará':'CE','Distrito Federal':'DF','Espírito Santo':'ES','Goiás':'GO','Maranhão':'MA','Mato Grosso':'MT','Mato Grosso do Sul':'MS','Minas Gerais':'MG','Pará':'PA','Paraíba':'PB','Paraná':'PR','Pernambuco':'PE','Piauí':'PI','Rio de Janeiro':'RJ','Rio Grande do Norte':'RN','Rio Grande do Sul':'RS','Rondônia':'RO','Roraima':'RR','Santa Catarina':'SC','São Paulo':'SP','Sergipe':'SE','Tocantins':'TO'};
+const norm = s => String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+// número da casa digitado (ignora CEP)
+function parseNumber(q){
+  const s = q.replace(/\b\d{5}-?\d{3}\b/g,' ');
+  const m = s.match(/(?:,|\bn[º°o.]?|\bn[uú]mero)\s*(\d{1,5})\b/i);
+  if (m) return +m[1];
+  // senão, o último número solto que não faz parte do nome (ex.: "Rua 15 de Novembro")
+  const all = [...s.matchAll(/\s(\d{1,5})\b(?!\s*(?:de|º|ª)\b)/gi)];
+  return all.length ? +all[all.length-1][1] : null;
+}
+function errMsg(e){ return e.name==='AbortError' ? 'tempo esgotado' : e.message; }
+
+// Nominatim primeiro; se falhar ou vier vazio, tenta Photon. Agrupa trechos repetidos da mesma rua (um por CEP).
 async function geocode(q){
-  let errs = [];
+  const num = parseNumber(q), errs = [];
+  let list = [];
   try{
-    const d = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=br&accept-language=pt-BR&q='+encodeURIComponent(q));
-    if (d.length) return d.map(x=>({lat:+x.lat, lon:+x.lon, display_name:x.display_name}));
-  }catch(e){ errs.push('Nominatim: '+(e.name==='AbortError'?'tempo esgotado':e.message)); }
+    const d = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=15&countrycodes=br&accept-language=pt-BR&q='+encodeURIComponent(q));
+    list = d.map(x => { const a = x.address||{};
+      return {lat:+x.lat, lon:+x.lon, road:a.road||a.pedestrian||a.footway||x.name, hn:a.house_number||null,
+        suburb:a.suburb||a.neighbourhood||a.city_district||a.quarter||'', city:a.city||a.town||a.municipality||a.village||'',
+        uf:(a['ISO3166-2-lvl4']||'').replace('BR-','') || UF[a.state] || ''}; });
+  }catch(e){ errs.push('Nominatim: '+errMsg(e)); }
+  if (!list.length){
+    try{
+      const d = await withTimeout('https://photon.komoot.io/api/?limit=15&bbox=-74,-34,-34,5.5&q='+encodeURIComponent(q));
+      list = (d.features||[]).map(f => { const p = f.properties||{};
+        return {lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], road:p.street||p.name, hn:p.housenumber||null,
+          suburb:p.district||p.locality||'', city:p.city||p.county||'', uf:UF[p.state]||''}; });
+    }catch(e){ errs.push('Photon: '+errMsg(e)); }
+  }
+  if (!list.length && errs.length) throw new Error(errs.join(' · '));
+  const seen = new Set(), out = [];
+  for (const r of list){
+    const k = norm([r.road, r.hn, r.suburb, r.city].join('|'));
+    if (seen.has(k)) continue; seen.add(k);
+    const n = r.hn || num;
+    r.label = [r.road ? r.road + (n ? ', ' + n : '') : null, r.suburb, r.city ? r.city + (r.uf ? ' - ' + r.uf : '') : null].filter(Boolean).join(' — ');
+    r.num = num; r.exact = !!r.hn;
+    out.push(r);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+// OpenStreetMap quase não tem numeração no Brasil: acha o CEP do trecho pelo número (ViaCEP) e pega a coordenada do CEP
+function inRange(comp, n){
+  const c = norm(comp);
+  if (!c) return true;
+  let lo = 0, hi = Infinity, m;
+  if ((m = c.match(/de\s+(\d+)(?:\/(\d+))?\s+ao\s+fim/))) lo = +m[1];
+  else if ((m = c.match(/de\s+(\d+)(?:\/(\d+))?\s+a\s+(\d+)(?:\/(\d+))?/))) { lo = +m[1]; hi = +(m[4]||m[3]); }
+  else if ((m = c.match(/ate\s+(\d+)(?:\/(\d+))?/))) hi = +(m[2]||m[1]);
+  else if (!/lado/.test(c)) return false;
+  if (/lado\s+impar/.test(c) && n % 2 === 0) return false;
+  if (/lado\s+par/.test(c) && n % 2 === 1) return false;
+  return n >= lo && n <= hi;
+}
+async function refineByNumber(r){
+  if (!r.num || r.exact || !r.road || !r.city || !r.uf) return null;
+  const tries = [r.road, r.road.replace(/^(rua|avenida|av\.?|travessa|alameda|praca|praça|estrada|rodovia)\s+/i,'')];
+  let rows = [];
+  for (const t of tries){
+    if (t.length < 3) continue;
+    try{
+      const d = await withTimeout(`https://viacep.com.br/ws/${r.uf}/${encodeURIComponent(r.city)}/${encodeURIComponent(t)}/json/`, 7000);
+      if (Array.isArray(d) && d.length){ rows = d; break; }
+    }catch(e){}
+  }
+  if (!rows.length) return null;
+  const same = rows.filter(x => norm(x.logradouro) === norm(r.road));
+  const pool = same.length ? same : rows;
+  const hit = pool.find(x => x.complemento && inRange(x.complemento, r.num)) || (pool.length === 1 ? pool[0] : null);
+  if (!hit) return null;
+  const cep = hit.cep.replace(/\D/g,'');
   try{
-    const d = await withTimeout('https://photon.komoot.io/api/?limit=5&bbox=-74,-34,-34,5.5&q='+encodeURIComponent(q));
-    return (d.features||[]).map(f=>{ const p=f.properties||{};
-      const name=[p.name, [p.street, p.housenumber].filter(Boolean).join(', '), p.district, p.city, p.state].filter(Boolean);
-      return {lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], display_name:[...new Set(name)].join(', ')}; });
-  }catch(e){ errs.push('Photon: '+(e.name==='AbortError'?'tempo esgotado':e.message)); }
-  if (errs.length) throw new Error(errs.join(' · '));
-  return [];
+    const a = await withTimeout(`https://cep.awesomeapi.com.br/json/${cep}`, 7000);
+    if (a && a.lat && a.lng) return {lat:+a.lat, lon:+a.lng, cep:hit.cep, bairro:hit.bairro};
+  }catch(e){}
+  try{
+    const b = await withTimeout(`https://brasilapi.com.br/api/cep/v2/${cep}`, 7000);
+    const c = b && b.location && b.location.coordinates;
+    if (c && c.latitude && c.longitude) return {lat:+c.latitude, lon:+c.longitude, cep:hit.cep, bairro:hit.bairro};
+  }catch(e){}
+  return {cep:hit.cep, bairro:hit.bairro};
 }
 function showResults(q, data){
   const box = $('#results');
@@ -325,25 +399,42 @@ function showResults(q, data){
     box.innerHTML = `<div class="banner"><span>Nenhum resultado. Marque tocando no mapa.</span><button class="btn" type="button" id="manualBtn">Marcar no mapa</button></div>`;
     $('#manualBtn').onclick = () => startManual(q); return;
   }
-  box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.display_name)}</button>`).join('') +
+  box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.label)}</button>`).join('') +
     `<button type="button" data-manual="1" style="color:var(--muted)">Nenhum desses — marcar no mapa</button></div>`;
-  box.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => { const d=data[+b.dataset.i]; pick(q, d.lat, d.lon, d.display_name); });
+  box.querySelectorAll('button[data-i]').forEach(b => b.onclick = async () => {
+    const r = await resolveResult(data[+b.dataset.i], box);
+    pick(q, r.lat, r.lon, r.label, {precision:r.precision, cep:r.cep});
+  });
   box.querySelector('[data-manual]').onclick = () => startManual(q);
+}
+async function resolveResult(d, box){
+  let lat = d.lat, lon = d.lon, precision = d.exact ? 'numero' : (d.num ? 'rua' : 'local'), cep = null;
+  if (d.num && !d.exact){
+    if (box) box.innerHTML = '<div class="hint">Localizando o número '+d.num+'…</div>';
+    const ref = await refineByNumber(d);
+    if (ref){ cep = ref.cep; if (ref.lat){ lat = ref.lat; lon = ref.lon; precision = 'cep'; } }
+  }
+  return {lat, lon, label:d.label, precision, cep};
 }
 function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
 map.on('click', e => {
+  if (movingId){ const it = S.items.find(x=>x.id===movingId); movingId = null; renderBanner();
+    if (it){ it.lat = e.latlng.lat; it.lng = e.latlng.lng; it.precision = 'ajustado'; save(); renderAll(); toast(`#${it.num} reposicionado`); }
+    return; }
   if (pendingManual !== null){ const q=pendingManual; pendingManual=null; pick(q, e.latlng.lat, e.latlng.lng, q); renderBanner(); return; }
   if (mode==='center'){ pick('Ponto no mapa', e.latlng.lat, e.latlng.lng, 'Ponto marcado no mapa'); }
 });
-function pick(q, lat, lng, display){
+function pick(q, lat, lng, display, extra={}){
   $('#results').innerHTML=''; $('#q').value='';
   if (mode==='center'){
     S.center = {lat, lng, label: display}; save(); drawCircle(); renderAll();
     map.fitBounds(circle.getBounds(), {padding:[20,20]}); setMode('add'); toast('Centro do círculo definido');
     return;
   }
-  const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, answers:{}, notes:'', link:'', createdAt:Date.now()};
-  S.items.push(it); save(); renderAll(); map.setView([lat,lng], Math.max(map.getZoom(),15));
+  const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, precision:extra.precision||'manual', cep:extra.cep||null, answers:{}, notes:'', link:'', createdAt:Date.now()};
+  S.items.push(it); save(); renderAll(); map.setView([lat,lng], Math.max(map.getZoom(),16));
+  if (it.precision==='rua') toast('Número não encontrado: pino no meio da rua. Arraste para ajustar.');
+  else if (it.precision==='cep') toast('Posição pelo CEP '+it.cep+'. Arraste se precisar.');
   startWizard(it.id, 0);
 }
 
@@ -405,7 +496,7 @@ function openDetail(id){
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
     <h2>#${it.num} ${esc(shortAddr(it.address))}</h2>
-    <div class="sub">${esc(it.address)}</div>
+    <div class="sub">${esc(it.address)}${it.cep?' · CEP '+esc(it.cep):''}<br>${esc({numero:'Posição exata do número', cep:'Posição aproximada pelo CEP do trecho', rua:'Posição aproximada (meio da rua) — arraste o pino', ajustado:'Posição ajustada à mão', manual:'Marcado no mapa', local:''}[it.precision]||'')}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
@@ -415,6 +506,13 @@ function openDetail(id){
     <div class="brk">${rows.map(r=>`<div>${r.key==='circulo'
         ? `<span>${esc(r.label)} <small class="hint">(${esc(r.val)})</small></span><span class="${r.pts>0?'plus':'zero'}">${r.pts>0?'+'+r.pts:'0'}</span>`
         : `<button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)} <small class="${r.unk?'q-unk':'hint'}">(${esc(r.unk?'não respondido':r.val)})</small></span><span class="${r.pts>0?'plus':r.pts<0?'minus':'zero'}">${r.pts>0?'+'+r.pts:r.pts}</span></button>`}</div>`).join('')}</div>`}
+    <div class="section-title">Endereço</div>
+    <form id="addrForm" class="row search">
+      <input id="addrInput" value="${esc(it.address)}" autocomplete="off" enterkeyhint="search">
+      <button class="btn" type="submit">Buscar</button>
+    </form>
+    <div id="addrResults"></div>
+    <div class="hint">Mude o texto e toque em Buscar para mover o pino. Pontuação e respostas são mantidas.</div>
     <div class="section-title">Anotações</div>
     <textarea id="notes" placeholder="Link do anúncio, telefone, impressões da visita…">${esc(it.notes)}</textarea>
     <div class="actions">
@@ -425,6 +523,25 @@ function openDetail(id){
     </div>
     <div class="hint" style="margin-top:10px">Toque em qualquer resposta para alterá-la. Para corrigir a posição, arraste o pino no mapa.</div>`;
   $('#sheet').querySelectorAll('[data-step]').forEach(b => b.onclick = () => renderStep(id, +b.dataset.step));
+  $('#addrForm').onsubmit = async e => {
+    e.preventDefault();
+    const q = $('#addrInput').value.trim(); if (!q) return;
+    const box = $('#addrResults'); box.innerHTML = '<div class="hint">Buscando…</div>';
+    const keepText = () => { it.address = q; it.query = q; save(); renderAll(); openDetail(id); toast('Endereço atualizado'); };
+    let data;
+    try{ data = await geocode(q); }
+    catch(err){ box.innerHTML = `<div class="banner"><span>A busca falhou.</span><button class="btn" type="button" id="keepTxt">Só salvar o texto</button></div>`; $('#keepTxt').onclick = keepText; return; }
+    box.innerHTML = '<div class="results">' + data.map((d,i)=>`<button type="button" data-i="${i}">${esc(d.label)}</button>`).join('') +
+      `<button type="button" data-keep="1" style="color:var(--muted)">Só salvar o texto, sem mover o pino</button>` +
+      `<button type="button" data-tap="1" style="color:var(--muted)">Marcar a posição tocando no mapa</button></div>`;
+    box.querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
+      const r = await resolveResult(data[+b.dataset.i], box);
+      Object.assign(it, {lat:r.lat, lng:r.lon, address:r.label, query:q, precision:r.precision, cep:r.cep});
+      save(); renderAll(); map.setView([it.lat,it.lng], Math.max(map.getZoom(),16)); openDetail(id); toast(`#${it.num} atualizado`);
+    });
+    box.querySelector('[data-keep]').onclick = keepText;
+    box.querySelector('[data-tap]').onclick = () => { it.address = q; it.query = q; save(); closeSheet(); movingId = id; renderBanner(); };
+  };
   $('#notes').oninput = e => { it.notes = e.target.value; clearTimeout(openDetail._t); openDetail._t = setTimeout(save, 400); };
   $('#redo').onclick = () => { if (st!=='pending'){ it.answers = {}; save(); renderAll(); } renderStep(id, 0); };
   $('#locate').onclick = () => { closeSheet(); map.setView([it.lat,it.lng], 17); };
@@ -454,13 +571,23 @@ function renderList(){
     const st = status(it), sc = score(it), ins = inside(it), r = ranked.findIndex(x=>x.id===it.id);
     const meta = st==='disq' ? esc(disqReason(it))
       : [ins===null?null:(ins?'Dentro do círculo':'Fora do círculo')+' · '+fmtDist(dist(S.center,it)), st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
-    return `<button class="card ${st==='disq'?'disq':''}" type="button" data-id="${it.id}">
+    return `<div class="card ${st==='disq'?'disq':''}" role="button" tabindex="0" data-id="${it.id}">
       <div class="num ${st}">${it.num}</div>
       <div class="body"><div class="addr">${esc(shortAddr(it.address))}</div><div class="meta">${meta}</div></div>
       <div class="score">${st==='disq' ? '<small>fora</small>' : `<b>${sc}</b><span class="rank">${r+1}º</span>`}</div>
-    </button>`;
+      <button class="del" type="button" data-del="${it.id}" aria-label="Excluir #${it.num}">✕</button>
+    </div>`;
   }).join('');
-  box.querySelectorAll('.card').forEach(c => c.onclick = () => { const it=S.items.find(x=>x.id===c.dataset.id); map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id); });
+  box.querySelectorAll('.card').forEach(c => c.onclick = e => {
+    const del = e.target.closest('[data-del]');
+    if (del){
+      e.stopPropagation();
+      if (del.classList.contains('armed')){ const it=S.items.find(x=>x.id===del.dataset.del); S.items = S.items.filter(x=>x.id!==del.dataset.del); save(); renderAll(); toast(`#${it.num} excluído`); }
+      else { box.querySelectorAll('.del.armed').forEach(x=>{x.classList.remove('armed'); x.textContent='✕';}); del.classList.add('armed'); del.textContent='Excluir?'; }
+      return;
+    }
+    const it=S.items.find(x=>x.id===c.dataset.id); map.setView([it.lat,it.lng], Math.max(map.getZoom(),15)); openDetail(c.dataset.id);
+  });
   const n = S.items.length, nd = disq.length;
   $('#listTitle').textContent = `Imóveis (${n}${nd?` · ${nd} desclassificado${nd>1?'s':''}`:''})`;
 }
@@ -509,10 +636,13 @@ $('#importFile').onchange = async e => {
 /* ---------- render ---------- */
 function renderBanner(){
   let h = '';
-  if (pendingManual !== null) h = `<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
+  const mv = movingId && S.items.find(x=>x.id===movingId);
+  if (mv) h = `<div class="banner"><span>Toque no mapa na nova posição do #${mv.num}.</span><button class="btn" type="button" id="cancelMove">Cancelar</button></div>`;
+  else if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
   else if (mode==='center') h = `<div class="banner"><span>Busque o endereço do centro ou toque no mapa.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
   else if (!saveOk) h = `<div class="banner"><span>Este navegador não está permitindo salvar. Use “Baixar backup”.</span></div>`;
   $('#banner').innerHTML = h;
+  const c0=$('#cancelMove'); if(c0) c0.onclick=()=>{movingId=null; renderBanner();};
   const c1=$('#cancelManual'); if(c1) c1.onclick=()=>{pendingManual=null; renderBanner();};
   const c2=$('#cancelCenter'); if(c2) c2.onclick=()=>setMode('add');
 }
