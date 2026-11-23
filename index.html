@@ -149,12 +149,13 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .total small { white-space: nowrap; }
 @media (max-width: 380px) { .cta { padding: 12px 14px; font-size: 0.9375rem; } .total strong { font-size: 1.3rem; } }
 .closed-msg {
-  margin: 12px 0 4px; padding: 18px 16px; border-radius: 16px; text-align: center;
-  background: var(--sun); color: var(--ink); display: grid; gap: 4px;
-  box-shadow: 0 2px 10px rgba(16, 50, 74, 0.08);
+  margin: 14px 0 4px; padding: 14px 16px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  color: var(--pink); border-radius: 999px; background: #fff; box-shadow: 0 2px 10px rgba(16, 50, 74, 0.06);
 }
-.closed-msg strong { font-family: var(--display); font-weight: 400; font-size: 1.5rem; color: var(--pink); line-height: 1.15; }
-.closed-msg span { font-size: 0.875rem; color: var(--muted); }
+.closed-msg strong { font-family: var(--body); font-weight: 600; font-size: 1.125rem; color: var(--ink); }
+.price .soon { display: none; font-family: var(--body); font-weight: 500; font-size: 0.875rem; color: var(--muted); }
+.is-closed .price .pv { display: none; }
+.is-closed .price .soon { display: inline; }
 .closed-msg[hidden], .search[hidden], .total[hidden], .cta[hidden], .unavailable[hidden] { display: none; }
 .unavailable { margin: 0; width: 100%; text-align: center; color: #fff; font-weight: 600; padding: 14px 0; }
 .is-closed .qty button:disabled { opacity: 0.35; }
@@ -167,8 +168,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
     <p class="updated">Preços atualizados em 22/11/2026</p>
   </header>
   <div class="closed-msg" id="closedMsg" hidden>
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zm-1 3v6l5 3 1-1.7-4-2.3V7h-2z"/></svg>
     <strong id="closedTitle">Lojinha fechada!</strong>
-    <span>Dá uma olhada nos produtos e volta mais tarde.</span>
   </div>
   <div class="search">
     <label for="busca" class="sr">Buscar produto</label>
@@ -261,7 +262,7 @@ PRODUCTS.forEach(p => {
       <p class="size" id="size-${p.id}">${(!v && p.sizeHtml) ? p.sizeHtml : sizeText}</p>
       ${p.soldOut ? '<p class="out">Fora de estoque</p>' : ""}${chips}
       <div class="row">
-        <p class="price">${brl(p.price)}</p>
+        <p class="price"><span class="pv">${brl(p.price)}</span><span class="soon">Atualizando em breve</span></p>
         <div class="qty">
           <button type="button" id="minus-${p.id}" aria-label="Remover um ${p.name}">−</button>
           <output id="q-${p.id}" aria-live="polite">0</output>
