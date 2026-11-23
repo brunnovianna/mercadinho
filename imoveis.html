@@ -42,7 +42,7 @@
   .results button{display:block;width:100%;text-align:left;padding:10px 12px;border:0;border-bottom:1px solid var(--line);background:#fff;font-size:14px}
   .results button:last-child{border-bottom:0}
   .hint{font-size:13px;color:var(--muted);margin:6px 0}
-  .banner{background:var(--warn-soft);color:#5d420f;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:10px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .banner{flex-wrap:wrap;background:var(--warn-soft);color:#5d420f;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:10px;display:flex;justify-content:space-between;gap:8px;align-items:center}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;width:100%;text-align:left}
   .card.disq{opacity:.6}
   .num{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;background:var(--pending)}
@@ -163,6 +163,7 @@
         <input id="beachNames" class="field" autocomplete="off" enterkeyhint="go">
         <button class="btn" type="button" id="beachLoad">Carregar</button>
       </div>
+      <div class="actions"><button class="btn" type="button" id="beachDraw">Desenhar no mapa</button></div>
       <div class="hint" id="beachInfo"></div>
     </div>
 
@@ -288,7 +289,7 @@ function status(it){
 function breakdown(it){
   const a = it.answers||{}, W = S.W, rows = [];
   const bd = beachDist(it);
-  if (bd === null) rows.push({key:'orla', label:'Distância da orla', val:'orla não carregada', pts:0, unk:true});
+  if (bd === null) rows.push({key:'orla', label:'Distância da orla', val: beachLoading ? 'carregando a avenida…' : 'avenida não carregada (seção Orla)', pts:0, unk:true});
   else { const i = W.orla.m.findIndex(m => bd <= m); rows.push({key:'orla', label:'Distância da orla', val:fmtDist(bd), pts: i >= 0 ? (W.orla.pts[i]||0) : 0, unk:false}); }
   const tier = orlaTier(it);
   rows.push({key:'circulo', label:'Distância do centro', val: orlaTxt(it), pts: tier ? (W.circulo[tier]||0) : 0, unk: tier===null});
@@ -501,30 +502,76 @@ function drawBeach(){
 function renderBeach(){
   if (document.activeElement !== $('#beachNames')) $('#beachNames').value = S.beach.names;
   const n = S.beach.lines.length;
+  if (beachLoading) return;
+  if (!n && beachError){ $('#beachInfo').innerHTML = beachError; return; }
   $('#beachInfo').innerHTML = n ? `Linha azul no mapa: ${n} trecho${n>1?'s':''} carregado${n>1?'s':''}. Mais de uma avenida: separe com ponto e vírgula.`
     : 'Toque em Carregar para buscar a avenida no mapa. A busca é feita em volta do centro do círculo (ou da área visível do mapa). Mais de uma avenida: separe com ponto e vírgula.';
 }
+async function nominatimLines(names, c){
+  const d = 0.15, vb = [c.lng-d, c.lat+d, c.lng+d, c.lat-d].map(x => x.toFixed(5)).join(',');
+  const out = [];
+  for (const n of names){
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&dedupe=0&limit=40&bounded=1&countrycodes=br'
+      + '&viewbox=' + vb + '&q=' + encodeURIComponent(n);
+    const res = await withTimeout(url, 15000);
+    for (const r of res){
+      const g = r.geojson; if (!g) continue;
+      const parts = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      parts.forEach(pts => { if (pts.length > 1) out.push(pts.map(([lo, la]) => [+la.toFixed(6), +lo.toFixed(6)])); });
+    }
+  }
+  return out;
+}
+async function overpassLines(rx, bbox){
+  const q = `[out:json][timeout:20];way["highway"]["name"~"${rx}",i](${bbox});out geom;`;
+  for (const host of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']){
+    try{
+      const data = await withTimeout(host + '?data=' + encodeURIComponent(q), 20000);
+      return (data.elements||[]).filter(e => e.geometry && e.geometry.length > 1).map(e => e.geometry.map(g => [+g.lat.toFixed(6), +g.lon.toFixed(6)]));
+    }catch(e){}
+  }
+  return null;
+}
+let beachLoading = false, beachError = '';
 async function loadBeach(){
   const names = $('#beachNames').value.split(';').map(x => x.trim()).filter(Boolean);
-  if (!names.length) return;
+  if (!names.length || beachLoading) return;
+  beachLoading = true; beachError = '';
   const c = S.center || map.getCenter(), d = 0.15;
   const bbox = [c.lat-d, c.lng-d, c.lat+d, c.lng+d].map(x => x.toFixed(5)).join(',');
-  const rx = names.map(n => n.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&')).join('|');
-  const q = `[out:json][timeout:25];way["highway"]["name"~"^(${rx})$",i](${bbox});out geom;`;
-  $('#beachLoad').disabled = true; $('#beachInfo').textContent = 'Buscando a avenida…';
-  let data = null;
-  for (const host of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']){
-    try{ data = await withTimeout(host + '?data=' + encodeURIComponent(q), 30000); break; }catch(e){}
+  const escRx = n => n.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&');
+  $('#beachLoad').disabled = true; $('#beachInfo').textContent = 'Buscando a avenida da orla…';
+  // 1º Nominatim (mesmo serviço da busca de endereço); 2º Overpass
+  let lines = null;
+  try{ lines = await nominatimLines(names, c); }catch(e){ lines = null; }
+  if (!lines || !lines.length){
+    const ov = await overpassLines('^(' + names.map(escRx).join('|') + ')$', bbox)
+      || await overpassLines('(' + names.map(n => escRx(n.replace(/^(avenida|av\.?)\s+/i, ''))).join('|') + ')', bbox);
+    if (ov && ov.length) lines = ov;
   }
-  $('#beachLoad').disabled = false;
-  if (!data){ $('#beachInfo').innerHTML = '<span style="color:var(--bad)">Não consegui buscar agora. Tente de novo em alguns segundos.</span>'; return; }
-  const lines = (data.elements||[]).filter(e => e.geometry && e.geometry.length > 1).map(e => e.geometry.map(g => [+g.lat.toFixed(6), +g.lon.toFixed(6)]));
-  if (!lines.length){ $('#beachInfo').innerHTML = `<span style="color:var(--bad)">Não achei “${esc(names.join('; '))}” perto do centro do círculo. Confira o nome exato da avenida.</span>`; return; }
+  $('#beachLoad').disabled = false; beachLoading = false;
+  if (!lines || !lines.length){
+    beachError = `<span style="color:var(--bad)">Não consegui carregar “${esc(names.join('; '))}”.</span> Use <b>Desenhar no mapa</b>: toque em pontos ao longo da avenida.`;
+    renderAll(); return;
+  }
   S.beach = {names:names.join('; '), lines};
   save(); drawBeach(); renderAll(); map.fitBounds(beachLayer.getBounds(), {padding:[20,20]});
   toast('Orla carregada');
 }
 $('#beachLoad').onclick = loadBeach;
+let drawPts = null, drawLayer = null;
+function redrawDraft(){
+  if (drawLayer){ map.removeLayer(drawLayer); drawLayer = null; }
+  if (drawPts && drawPts.length) drawLayer = L.polyline(drawPts, {color:'#1d6fd1', weight:4, dashArray:'6 6'}).addTo(map);
+}
+$('#beachDraw').onclick = () => {
+  setMode('add'); drawPts = []; redrawDraft(); renderBanner();
+  $('#map').scrollIntoView({behavior:'smooth', block:'start'});
+};
+function finishDraw(){
+  if (drawPts.length >= 2){ S.beach = {names:'Orla desenhada no mapa', lines:[drawPts]}; save(); drawBeach(); renderAll(); toast('Orla salva'); }
+  drawPts = null; redrawDraft(); renderBanner();
+}
 $('#beachNames').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); loadBeach(); } };
 
 /* ---------- pontos de referência ---------- */
@@ -579,6 +626,7 @@ function refDistances(it){
 function startManual(q){ pendingManual = q; $('#results').innerHTML=''; renderBanner(); }
 map.on('click', e => {
   const {lat, lng} = e.latlng;
+  if (drawPts){ drawPts.push([+lat.toFixed(6), +lng.toFixed(6)]); redrawDraft(); renderBanner(); return; }
   if (pendingManual !== null){ const q = pendingManual; pendingManual = null; pick(q, lat, lng, q); renderBanner(); return; }
   if (mode==='center') pick('Ponto no mapa', lat, lng, 'Ponto marcado no mapa');
   if (mode==='ref') reverseLabel(lat, lng).then(l => confirmRef({lat, lng}, l));
@@ -589,6 +637,7 @@ function pick(q, lat, lng, display){
   if (mode==='center'){
     S.center = {lat, lng, label: display}; save(); drawCircle(); renderAll();
     map.fitBounds(circle.getBounds(), {padding:[20,20]}); setMode('add'); toast('Centro do círculo definido');
+    if (!S.beach.lines.length) loadBeach();
     return;
   }
   const it = {id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()), num:S.nextNum++, query:q, address:display, lat, lng, answers:{}, notes:'', createdAt:Date.now()};
@@ -889,11 +938,16 @@ $('#importFile').onchange = async e => {
 /* ---------- render ---------- */
 function renderBanner(){
   let h = '';
-  if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
+  if (drawPts) h = `<div class="banner"><span>Toque no mapa ao longo da avenida da orla, de uma ponta à outra (${drawPts.length} ponto${drawPts.length===1?'':'s'}).</span>
+      <span class="row"><button class="btn" type="button" id="drawUndo" ${drawPts.length?'':'disabled'}>Desfazer</button><button class="btn primary" type="button" id="drawDone" ${drawPts.length>=2?'':'disabled'}>Concluir</button><button class="btn ghost" type="button" id="drawCancel">Cancelar</button></span></div>`;
+  else if (pendingManual !== null) h =`<div class="banner"><span>Toque no mapa onde fica “${esc(pendingManual)}”.</span><button class="btn" type="button" id="cancelManual">Cancelar</button></div>`;
   else if (mode==='center') h = `<div class="banner"><span>Busque o endereço do centro ou toque no mapa.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
   else if (mode==='ref') h = `<div class="banner"><span>Cole as coordenadas, busque o endereço ou toque no mapa para marcar o ponto de referência.</span><button class="btn" type="button" id="cancelCenter">Cancelar</button></div>`;
   else if (!saveOk) h = `<div class="banner"><span>Este navegador não está permitindo salvar. Use “Baixar backup”.</span></div>`;
   $('#banner').innerHTML = h;
+  const du=$('#drawUndo'); if(du) du.onclick=()=>{ drawPts.pop(); redrawDraft(); renderBanner(); };
+  const dd=$('#drawDone'); if(dd) dd.onclick=finishDraw;
+  const dc=$('#drawCancel'); if(dc) dc.onclick=()=>{ drawPts=null; redrawDraft(); renderBanner(); };
   const c1=$('#cancelManual'); if(c1) c1.onclick=()=>{pendingManual=null; renderBanner();};
   const c2=$('#cancelCenter'); if(c2) c2.onclick=()=>setMode('add');
 }
@@ -903,6 +957,7 @@ function renderAll(redrawCircle=true){
 }
 
 drawCircle(); drawBeach(); renderWeights(); renderAll(); renderBanner();
+if (!S.beach.lines.length) loadBeach();
 { const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
   if (pts.length > 1) map.fitBounds(pts, {padding:[30,30], maxZoom:16}); else if (pts.length===1) map.setView(pts[0], 15); }
 </script>
