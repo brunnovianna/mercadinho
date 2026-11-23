@@ -156,6 +156,16 @@
       </div>
     </div>
 
+    <div class="section-title">Orla</div>
+    <div class="settings">
+      <label for="beachNames" style="margin-top:0">Avenida(s) da orla</label>
+      <div class="row">
+        <input id="beachNames" class="field" autocomplete="off" enterkeyhint="go">
+        <button class="btn" type="button" id="beachLoad">Carregar</button>
+      </div>
+      <div class="hint" id="beachInfo"></div>
+    </div>
+
     <div class="section-title">Pesos</div>
     <details class="settings">
       <summary>Editar pontuação de cada critério</summary>
@@ -194,7 +204,8 @@ const DQ = [
 ];
 // ordem de pergunta = ordem da lista (maior peso primeiro). "circulo" é calculado pelo mapa.
 const POS = [
-  {key:'circulo', label:'Distância da orla', auto:true},
+  {key:'orla', label:'Distância da orla', auto:true},
+  {key:'circulo', label:'Distância do centro', auto:true},
   {key:'valor', label:'Valor', q:'Qual o valor total?', choices:[
     {v:'5k', t:'Até R$ 5 mil'}, {v:'6k', t:'Até R$ 6 mil'}, {v:'7k', t:'Até R$ 7 mil'}, {v:'mais', t:'Acima de R$ 7 mil'}]},
   {key:'metragem', label:'Metragem', q:'Qual a metragem?', choices:[
@@ -217,6 +228,8 @@ const NEG = [
 // faixas da distância até o centro do círculo, em % do raio
 const ORLA = [{v:'25', t:'até 25% do raio'}, {v:'50', t:'25 a 50% do raio'}, {v:'75', t:'50 a 75% do raio'}, {v:'100', t:'75 a 100% do raio'}];
 const DEFAULT_W = {
+  // orla: até X metros da avenida vale Y pontos (faixas em ordem crescente)
+  orla:{m:[200,400,600,800], pts:[12,9,6,3]},
   circulo:{'25':11,'50':8,'75':6,'100':3},
   valor:{'5k':10,'6k':7,'7k':3,'mais':0},
   metragem:{'135':9,'120':5,'menos':0},
@@ -231,7 +244,7 @@ let S = load();
 function renumber(){ S.items.sort((a,b)=>a.num-b.num).forEach((it,i)=>it.num=i+1); S.nextNum = S.items.length+1; }
 function removeItem(id){ const it = S.items.find(x=>x.id===id); S.items = S.items.filter(x=>x.id!==id); renumber(); save(); renderAll(); return it; }
 renumber();
-function blank(){ return {center:null, radius:1500, items:[], refs:[], brokers:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
+function blank(){ return {center:null, radius:1500, beach:{names:'Avenida Presidente Wilson', lines:[]}, items:[], refs:[], brokers:[], nextNum:1, sort:'score', W:structuredClone(DEFAULT_W)}; }
 function load(){
   try{ const raw = localStorage.getItem(KEY); if(raw) return hydrate(JSON.parse(raw)); }catch(e){}
   return blank();
@@ -239,8 +252,9 @@ function load(){
 // completa dados salvos por versões antigas (ex.: círculo valia um número só)
 function hydrate(d){
   const W = Object.assign(structuredClone(DEFAULT_W), d.W||{});
+  if (!W.orla || !Array.isArray(W.orla.m)) W.orla = structuredClone(DEFAULT_W.orla);
   if (typeof W.circulo === 'number'){ const n = W.circulo; W.circulo = {'25':n, '50':Math.round(n*.75), '75':Math.round(n*.5), '100':Math.round(n*.25)}; }
-  return Object.assign(blank(), d, {W, refs:d.refs||[], brokers:d.brokers||[]});
+  return Object.assign(blank(), d, {W, refs:d.refs||[], brokers:d.brokers||[], beach:d.beach||blank().beach});
 }
 let saveOk = true;
 function save(){
@@ -273,8 +287,11 @@ function status(it){
 }
 function breakdown(it){
   const a = it.answers||{}, W = S.W, rows = [];
+  const bd = beachDist(it);
+  if (bd === null) rows.push({key:'orla', label:'Distância da orla', val:'orla não carregada', pts:0, unk:true});
+  else { const i = W.orla.m.findIndex(m => bd <= m); rows.push({key:'orla', label:'Distância da orla', val:fmtDist(bd), pts: i >= 0 ? (W.orla.pts[i]||0) : 0, unk:false}); }
   const tier = orlaTier(it);
-  rows.push({key:'circulo', label:'Distância da orla', val: orlaTxt(it), pts: tier ? (W.circulo[tier]||0) : 0, unk: tier===null});
+  rows.push({key:'circulo', label:'Distância do centro', val: orlaTxt(it), pts: tier ? (W.circulo[tier]||0) : 0, unk: tier===null});
   for (const p of POS.filter(p=>!p.auto)){
     const v = a[p.key];
     if (p.choices){
@@ -291,7 +308,7 @@ function breakdown(it){
   return rows;
 }
 function score(it){ return status(it)==='disq' ? null : breakdown(it).reduce((s,r)=>s+r.pts,0); }
-function maxScore(){ const W=S.W; return Math.max(...Object.values(W.circulo))+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
+function maxScore(){ const W=S.W; return Math.max(0, ...W.orla.pts)+Math.max(...Object.values(W.circulo))+Math.max(...Object.values(W.valor))+Math.max(...Object.values(W.metragem))+POS.filter(p=>!p.auto&&!p.choices).reduce((s,p)=>s+W[p.key],0); }
 function disqReason(it){ const a=it.answers||{}; return DQ.filter(d=>a[d.key]===false).map(d=>d.reason).join(' · '); }
 
 /* ---------- mapa ---------- */
@@ -461,6 +478,55 @@ function confirmNew(q, c, label){
   inp.onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); go(); } };
   $('#addCancel').onclick = () => { box.innerHTML = ''; };
 }
+/* ---------- orla: distância perpendicular até a avenida ---------- */
+// menor distância do ponto até qualquer trecho da avenida (projeção local em metros)
+function segDist(p, a, b){
+  const k = Math.cos(p.lat * Math.PI / 180), M = 111320;
+  const ax = (a[1]-p.lng)*k*M, ay = (a[0]-p.lat)*M, bx = (b[1]-p.lng)*k*M, by = (b[0]-p.lat)*M;
+  const dx = bx-ax, dy = by-ay, L2 = dx*dx + dy*dy;
+  const t = L2 ? Math.max(0, Math.min(1, -(ax*dx + ay*dy) / L2)) : 0;
+  return Math.hypot(ax + t*dx, ay + t*dy);
+}
+function beachDist(p){
+  const lines = S.beach && S.beach.lines; if (!lines || !lines.length) return null;
+  let best = Infinity;
+  for (const ln of lines) for (let i = 1; i < ln.length; i++) best = Math.min(best, segDist(p, ln[i-1], ln[i]));
+  return best;
+}
+let beachLayer = null;
+function drawBeach(){
+  if (beachLayer){ map.removeLayer(beachLayer); beachLayer = null; }
+  if (S.beach.lines.length) beachLayer = L.polyline(S.beach.lines, {color:'#1d6fd1', weight:5, opacity:.55, interactive:false}).addTo(map);
+}
+function renderBeach(){
+  if (document.activeElement !== $('#beachNames')) $('#beachNames').value = S.beach.names;
+  const n = S.beach.lines.length;
+  $('#beachInfo').innerHTML = n ? `Linha azul no mapa: ${n} trecho${n>1?'s':''} carregado${n>1?'s':''}. Mais de uma avenida: separe com ponto e vírgula.`
+    : 'Toque em Carregar para buscar a avenida no mapa. A busca é feita em volta do centro do círculo (ou da área visível do mapa). Mais de uma avenida: separe com ponto e vírgula.';
+}
+async function loadBeach(){
+  const names = $('#beachNames').value.split(';').map(x => x.trim()).filter(Boolean);
+  if (!names.length) return;
+  const c = S.center || map.getCenter(), d = 0.15;
+  const bbox = [c.lat-d, c.lng-d, c.lat+d, c.lng+d].map(x => x.toFixed(5)).join(',');
+  const rx = names.map(n => n.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&')).join('|');
+  const q = `[out:json][timeout:25];way["highway"]["name"~"^(${rx})$",i](${bbox});out geom;`;
+  $('#beachLoad').disabled = true; $('#beachInfo').textContent = 'Buscando a avenida…';
+  let data = null;
+  for (const host of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']){
+    try{ data = await withTimeout(host + '?data=' + encodeURIComponent(q), 30000); break; }catch(e){}
+  }
+  $('#beachLoad').disabled = false;
+  if (!data){ $('#beachInfo').innerHTML = '<span style="color:var(--bad)">Não consegui buscar agora. Tente de novo em alguns segundos.</span>'; return; }
+  const lines = (data.elements||[]).filter(e => e.geometry && e.geometry.length > 1).map(e => e.geometry.map(g => [+g.lat.toFixed(6), +g.lon.toFixed(6)]));
+  if (!lines.length){ $('#beachInfo').innerHTML = `<span style="color:var(--bad)">Não achei “${esc(names.join('; '))}” perto do centro do círculo. Confira o nome exato da avenida.</span>`; return; }
+  S.beach = {names:names.join('; '), lines};
+  save(); drawBeach(); renderAll(); map.fitBounds(beachLayer.getBounds(), {padding:[20,20]});
+  toast('Orla carregada');
+}
+$('#beachLoad').onclick = loadBeach;
+$('#beachNames').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); loadBeach(); } };
+
 /* ---------- pontos de referência ---------- */
 function confirmRef(c, label){
   const box = $('#results');
@@ -590,14 +656,14 @@ function openDetail(id){
   const stepIndex = k => ST.findIndex(s=>s.key===k);
   $('#sheet').innerHTML = `
     <h2 id="detTitle">#${it.num} ${esc(it.address)}</h2>
-    <div class="sub">${S.center ? 'Orla: ' + orlaTxt(it) : 'Sem círculo definido'}${S.refs.length ? '<br>' + refDistances(it).map(r => esc(r.name) + ': ' + fmtDist(r.d)).join(' · ') : ''}</div>
+    <div class="sub">${S.center ? 'Centro: ' + orlaTxt(it) : 'Sem círculo definido'}${beachDist(it) !== null ? '<br>Orla (' + esc(S.beach.names) + '): <b>' + fmtDist(beachDist(it)) + '</b>' : ''}${S.refs.length ? '<br>' + refDistances(it).map(r => esc(r.name) + ': ' + fmtDist(r.d)).join(' · ') : ''}</div>
     ${st==='disq' ? `<div class="disq-box">Desclassificado: ${esc(disqReason(it))}</div>` : `
       <div class="total"><span class="hint">${st==='done'?'Pontuação':'Pontuação parcial'} ${pos>=0&&st!=='disq'?`· ${pos+1}º lugar`:''}</span><b>${sc} <small style="font-size:14px;color:var(--muted)">/ ${maxScore()}</small></b></div>`}
     <div class="section-title" style="margin-top:8px">Eliminatórias</div>
     <div class="brk">${dqRows.map(r=>`<div><button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)}</span><span class="${r.bad?'minus':r.unk?'q-unk':'zero'}">${r.val}</span></button></div>`).join('')}</div>
     ${st==='disq' ? '' : `
     <div class="section-title">Pontuação</div>
-    <div class="brk">${rows.map(r=>`<div>${r.key==='circulo'
+    <div class="brk">${rows.map(r=>`<div>${(r.key==='circulo' || r.key==='orla')
         ? `<span>${esc(r.label)} <small class="hint">(${esc(r.val)})</small></span><span class="${r.pts>0?'plus':'zero'}">${r.pts>0?'+'+r.pts:'0'}</span>`
         : `<button type="button" data-step="${stepIndex(r.key)}"><span>${esc(r.label)} <small class="${r.unk?'q-unk':'hint'}">(${esc(r.unk?'não respondido':r.val)})</small></span><span class="${r.pts>0?'plus':r.pts<0?'minus':'zero'}">${r.pts>0?'+'+r.pts:r.pts}</span></button>`}</div>`).join('')}</div>`}
     <div class="section-title">Endereço</div>
@@ -749,7 +815,7 @@ function renderList(){
   box.innerHTML = order.map(it => {
     const st = status(it), sc = score(it), ins = inside(it), r = ranked.findIndex(x=>x.id===it.id);
     const meta = st==='disq' ? esc(disqReason(it))
-      : [ins===null?null:orlaTxt(it), brokerOf(it)?.name || null, st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
+      : [ins===null?null:'Centro ' + orlaTxt(it), beachDist(it) !== null ? 'Orla ' + fmtDist(beachDist(it)) : null, brokerOf(it)?.name || null, st==='pending'?'Questionário pendente':st==='partial'?'Respostas faltando':null].filter(Boolean).join(' · ');
     return `<div class="card ${st==='disq'?'disq':''}" role="button" tabindex="0" data-id="${it.id}">
       <div class="num ${st}">${it.num}</div>
       <div class="body"><div class="addr">${esc(shortAddr(it.address))}</div><div class="meta">${meta}</div></div>
@@ -785,12 +851,20 @@ function renderWeights(){
   const W = S.W;
   const line = (label, path) => `<span>${esc(label)}</span><input type="number" step="1" data-w="${path}" value="${path.split('.').reduce((o,k)=>o[k],W)}">`;
   let h = '<div class="wgrid">';
-  ORLA.forEach(t => h += line(`Distância da orla: ${t.t}`, `circulo.${t.v}`));
+  W.orla.m.forEach((m, i) => h += `<span>Distância da orla: até <input type="number" step="50" min="0" data-om="${i}" value="${m}" style="width:72px;padding:4px 6px;border:1px solid var(--line);border-radius:6px"> m</span><input type="number" step="1" data-op="${i}" value="${W.orla.pts[i]}">`);
+  ORLA.forEach(t => h += line(`Distância do centro: ${t.t}`, `circulo.${t.v}`));
   POS.filter(p=>!p.auto).forEach(p => { if(p.choices) p.choices.forEach(c=>h+=line(`${p.label}: ${c.t}`, `${p.key}.${c.v}`)); else h+=line(p.label, p.key); });
   NEG.forEach(n => h += line(`${n.label} (desconta)`, n.key));
   h += '</div>';
   $('#weights').innerHTML = h;
-  $('#weights').querySelectorAll('input').forEach(inp => inp.onchange = () => {
+  $('#weights').querySelectorAll('input[data-om],input[data-op]').forEach(inp => inp.onchange = () => {
+    const i = +(inp.dataset.om ?? inp.dataset.op), v = Math.abs(Math.round(+inp.value||0));
+    if (inp.dataset.om !== undefined) S.W.orla.m[i] = v; else S.W.orla.pts[i] = v;
+    // mantém as faixas em ordem crescente de distância
+    S.W.orla.m.sort((a,b) => a-b);
+    save(); renderWeights(); renderAll(false);
+  });
+  $('#weights').querySelectorAll('input[data-w]').forEach(inp => inp.onchange = () => {
     const path = inp.dataset.w.split('.'); let o = S.W; while(path.length>1) o = o[path.shift()];
     o[path[0]] = Math.abs(Math.round(+inp.value||0)); inp.value = o[path[0]]; save(); renderAll(false);
   });
@@ -807,7 +881,7 @@ $('#copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(J
 $('#importFile').onchange = async e => {
   const f = e.target.files[0]; if(!f) return;
   try{ const d = JSON.parse(await f.text()); if(!Array.isArray(d.items)) throw 0;
-    S = hydrate(d); renumber(); save(); drawCircle(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
+    S = hydrate(d); renumber(); save(); drawCircle(); drawBeach(); renderWeights(); renderAll(); toast(`${S.items.length} imóveis importados`);
   }catch(err){ toast('Arquivo inválido'); }
   e.target.value='';
 };
@@ -825,10 +899,10 @@ function renderBanner(){
 }
 function renderAll(redrawCircle=true){
   document.querySelectorAll('[data-sort]').forEach(b=>b.classList.toggle('on', b.dataset.sort===S.sort));
-  renderList(); drawMarkers(); drawRefs(); renderRefs(); renderBrokers(); renderCircleSettings();
+  renderList(); drawMarkers(); drawRefs(); renderRefs(); renderBrokers(); renderCircleSettings(); renderBeach();
 }
 
-drawCircle(); renderWeights(); renderAll(); renderBanner();
+drawCircle(); drawBeach(); renderWeights(); renderAll(); renderBanner();
 { const pts = S.items.map(i=>[i.lat,i.lng]); if (S.center) pts.push([S.center.lat,S.center.lng]);
   if (pts.length > 1) map.fitBounds(pts, {padding:[30,30], maxZoom:16}); else if (pts.length===1) map.setView(pts[0], 15); }
 </script>
