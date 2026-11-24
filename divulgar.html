@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Divulgar · Mercadinho do Olympia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Playball&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Página interna de divulgação: escolhe o produto, o tipo de chamada e compartilha o cartaz.
+   Nome, preço, opções e fotos vêm do index.html (lidos na abertura), então ficam sempre iguais aos do site. */
+:root {
+  --bg: #fff4cc; --ink: #10324a; --muted: #4d6475; --sun: #ffd23f; --pink: #ef476f; --teal: #0b6e8f;
+  --line: rgba(16, 50, 74, 0.12);
+  --display: "Archivo Black", "Arial Black", system-ui, sans-serif;
+  --body: "Poppins", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body); padding-bottom: 48px; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+header { padding: 22px 0 4px; }
+h1 { font-family: var(--display); font-weight: 400; font-size: 1.5rem; line-height: 1.1; margin: 0 0 6px; }
+header p { margin: 0; color: var(--muted); font-size: 0.875rem; }
+.search { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 0 8px; }
+input, textarea, select { font: inherit; color: var(--ink); }
+.search input, .field input, textarea {
+  width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(16, 50, 74, 0.15); background: #fff;
+}
+input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--pink); outline-offset: 1px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+.plist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 10px; }
+.plist button {
+  width: 100%; display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center; text-align: left;
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 10px 14px 10px 10px; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(16, 50, 74, 0.06); font: inherit; color: inherit;
+}
+.plist button:disabled { opacity: 0.5; cursor: not-allowed; }
+.plist img { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; background: #fff; }
+.pname { font-weight: 600; margin: 0; line-height: 1.3; }
+.psize { color: var(--muted); font-size: 0.8125rem; margin: 2px 0 0; }
+.pprice { font-family: var(--display); font-size: 1.0625rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.msg { color: var(--muted); text-align: center; margin: 24px 0; }
+.msg.err { color: #b3264a; }
+
+#editor[hidden], #picker[hidden], [hidden] { display: none !important; }
+.back { background: none; border: 0; padding: 14px 0 6px; color: var(--teal); font: 600 0.9375rem var(--body); cursor: pointer; }
+.ename { font-weight: 600; font-size: 1.125rem; margin: 0; line-height: 1.3; }
+.esize { color: var(--muted); font-size: 0.875rem; margin: 2px 0 0; }
+.preview { display: block; width: 100%; max-width: 380px; height: auto; margin: 16px auto 4px; border-radius: 18px; box-shadow: 0 6px 24px rgba(16, 50, 74, 0.18); }
+
+.group { margin: 20px 0 0; }
+.glabel { display: block; font-weight: 600; font-size: 0.875rem; margin: 0 0 8px; }
+.seg { display: flex; flex-wrap: wrap; gap: 8px; }
+.seg button {
+  border: 1px solid rgba(16, 50, 74, 0.2); background: #fff; color: var(--ink); border-radius: 999px;
+  padding: 9px 14px; font: 500 0.875rem var(--body); cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip { width: 30px; height: 30px; border-radius: 50%; padding: 0; cursor: pointer; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(16, 50, 74, 0.25); }
+.chip[aria-pressed="true"] { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--pink); }
+.chosen { color: var(--muted); font-size: 0.8125rem; margin: 6px 0 0; }
+.fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.field { display: grid; gap: 4px; font-size: 0.8125rem; color: var(--muted); }
+.field input { width: 120px; padding: 10px 12px; }
+.hint { color: var(--muted); font-size: 0.8125rem; margin: 8px 0 0; }
+.warn { color: #b3264a; font-size: 0.8125rem; margin: 8px 0 0; font-weight: 500; }
+textarea { min-height: 190px; resize: vertical; font-size: 0.875rem; line-height: 1.45; }
+
+.actions { display: grid; gap: 10px; margin-top: 20px; }
+.primary { background: var(--pink); color: #fff; border: 0; border-radius: 14px; padding: 15px 18px; font: 600 1rem var(--body); cursor: pointer; }
+.primary:disabled { opacity: 0.5; cursor: wait; }
+.secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.secondary button { background: #fff; color: var(--ink); border: 1px solid rgba(16, 50, 74, 0.2); border-radius: 12px; padding: 11px 12px; font: 500 0.875rem var(--body); cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Divulgar produtos</h1>
+    <p>Escolha o produto, o tipo de chamada e compartilhe nos grupos. Nome, preço e fotos vêm do site.</p>
+  </header>
+
+  <section id="picker">
+    <div class="search">
+      <label for="busca" class="sr">Buscar produto</label>
+      <input id="busca" type="search" placeholder="Buscar produto" autocomplete="off">
+    </div>
+    <p class="msg" id="loading">Carregando produtos…</p>
+    <ul class="plist" id="plist"></ul>
+  </section>
+
+  <section id="editor" hidden>
+    <button type="button" class="back" id="back">← Produtos</button>
+    <p class="ename" id="eName"></p>
+    <p class="esize" id="eSize"></p>
+    <p class="hint" id="offNote" hidden></p>
+    <canvas class="preview" id="preview" width="1080" height="1350" aria-label="Prévia do cartaz"></canvas>
+
+    <div class="group" id="optGroup">
+      <span class="glabel">Foto da opção</span>
+      <div class="chips" id="chips" role="group" aria-label="Opção em destaque"></div>
+      <p class="chosen" id="chosen"></p>
+    </div>
+
+    <div class="group">
+      <span class="glabel">Tipo de chamada</span>
+      <div class="seg" id="modes" role="group" aria-label="Tipo de chamada">
+        <button type="button" data-mode="normal" aria-pressed="true">Normal</button>
+        <button type="button" data-mode="baixou" aria-pressed="false">Preço baixou</button>
+        <button type="button" data-mode="novidade" aria-pressed="false">Novidade</button>
+        <button type="button" data-mode="combo" aria-pressed="false">Combo</button>
+      </div>
+    </div>
+
+    <div class="group" id="dropGroup" hidden>
+      <div class="fields">
+        <label class="field">Preço anterior (R$)
+          <input id="oldPrice" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
+        </label>
+      </div>
+      <p class="hint" id="dropHint"></p>
+      <p class="warn" id="dropWarn" hidden>O preço anterior precisa ser maior que o atual do site.</p>
+    </div>
+
+    <div class="group" id="comboGroup" hidden>
+      <div class="seg" id="comboTipo" role="group" aria-label="Formato do combo" style="margin-bottom:12px">
+        <button type="button" data-tipo="pague" aria-pressed="true">Leve X, pague Y</button>
+        <button type="button" data-tipo="por" aria-pressed="false">Leve X por R$</button>
+      </div>
+      <div class="fields">
+        <label class="field">Leve
+          <input id="leve" type="text" inputmode="numeric" value="3" autocomplete="off">
+        </label>
+        <label class="field" id="pagueField">Pague (unidades)
+          <input id="pague" type="text" inputmode="numeric" value="2" autocomplete="off">
+        </label>
+        <label class="field" id="totalField" hidden>Por (R$)
+          <input id="total" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
+        </label>
+      </div>
+      <p class="hint" id="comboHint"></p>
+      <p class="warn" id="comboWarn" hidden></p>
+    </div>
+
+    <div class="group">
+      <label class="glabel" for="texto">Texto que vai junto</label>
+      <textarea id="texto"></textarea>
+      <p class="hint">Atualiza sozinho quando você muda as opções acima. Edite por último.</p>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="primary" id="share">Compartilhar</button>
+      <div class="secondary">
+        <button type="button" id="dl">Baixar imagem</button>
+        <button type="button" id="copy">Copiar texto</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+// cartaz.js — gera o cartaz de divulgação de um produto (1080×1350) e a legenda, e compartilha.
+(function () {
+  const SITE = "https://brunnovianna.github.io/mercadinho/";
+  const INK = "#10324a", MUTED = "#4d6475", PINK = "#ef476f", TEAL = "#0b6e8f", SUN = "#ffd23f", RAY = "#ffc419";
+  const brl = v => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  // Fontes carregadas já na abertura, para o clique não esperar (o celular exige compartilhar logo após o toque).
+  const fontsReady = Promise.all([
+    document.fonts.load('92px "Archivo Black"'),
+    document.fonts.load('76px "Playball"'),
+    document.fonts.load('600 50px "Poppins"'),
+    document.fonts.load('400 34px "Poppins"'),
+    document.fonts.load('500 38px "Poppins"'),
+  ]).catch(() => {});
+
+  // Dados do cartaz a partir de um produto do ALL_PRODUCTS (e da opção escolhida, se tiver).
+  function base(p, variantKey) {
+    const v = p.variants ? (p.variants.find(o => o.key === variantKey) || p.variants[0]) : null;
+    return {
+      id: p.id, name: p.name, size: p.size, price: p.price,
+      options: p.variants ? p.variants.map(o => ({ key: o.key, label: o.label, color: o.color })) : [],
+      selectedKey: v ? v.key : null,
+      imgSrc: v ? v.img : p.img,
+      link: SITE,
+      fileName: `mercadinho-${p.id}${v ? "-" + v.key : ""}`,
+      mode: "normal", // "normal" | "baixou" | "novidade" | "combo"
+      oldPrice: null, // preço anterior, para "baixou"
+      combo: null,    // { leve, tipo: "pague" | "por", pague, total }
+    };
+  }
+
+  function comboInfo(d) {
+    const c = d.combo;
+    if (d.mode !== "combo" || !c || !(c.leve >= 2)) return null;
+    const total = c.tipo === "pague" ? c.pague * d.price : c.total;
+    if (!(total > 0) || (c.tipo === "pague" && !(c.pague >= 1 && c.pague < c.leve))) return null;
+    return {
+      label: c.tipo === "pague" ? `Leve ${c.leve}, pague ${c.pague}` : `Leve ${c.leve} por`,
+      total, each: total / c.leve, saving: d.price * c.leve - total,
+    };
+  }
+  const hasDrop = d => d.mode === "baixou" && d.oldPrice > d.price;
+
+  function caption(d) {
+    const head = { baixou: "*Preço baixou!* 🔻", novidade: "*Novidade no mercadinho!* ✨", combo: "*Combo* 🛒" }[d.mode];
+    const lines = [];
+    if (head) lines.push(head, "");
+    lines.push(`*${d.name}*`, d.size);
+    if (d.options.length) lines.push(`Opções: ${d.options.map(o => o.label).join(", ")}`);
+    const ci = comboInfo(d);
+    if (hasDrop(d)) lines.push(`De ~${brl(d.oldPrice)}~ por *${brl(d.price)}*`);
+    else if (ci) {
+      lines.push(d.combo.tipo === "pague" ? `*${ci.label}: ${brl(ci.total)}*` : `*${ci.label} ${brl(ci.total)}*`);
+      lines.push(`Sai ${brl(ci.each)} cada` + (ci.saving > 0.004 ? ` (economia de ${brl(ci.saving)})` : ""));
+    } else lines.push(`*${brl(d.price)}*`);
+    lines.push("", `Peça aqui: ${d.link}`);
+    return lines.join("\n");
+  }
+
+  function rrect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function wrapLines(ctx, text, maxW, maxLines) {
+    const lines = []; let line = "";
+    for (const w of text.split(" ")) {
+      const t = line ? `${line} ${w}` : w;
+      if (!line || ctx.measureText(t).width <= maxW) line = t; else { lines.push(line); line = w; }
+    }
+    if (line) lines.push(line);
+    if (lines.length > maxLines) {
+      lines.length = maxLines;
+      let last = lines[maxLines - 1];
+      while (last && ctx.measureText(last + "…").width > maxW) last = last.slice(0, -1);
+      lines[maxLines - 1] = last.trimEnd() + "…";
+    }
+    return lines;
+  }
+
+  function draw(d, img) {
+    const W = 1080, H = 1350;
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const x = c.getContext("2d");
+    const ci = comboInfo(d), drop = hasDrop(d);
+
+    // Fundo com raios de sol
+    x.fillStyle = SUN; x.fillRect(0, 0, W, H);
+    x.fillStyle = RAY;
+    const cx = W / 2, cy = 700, n = 32;
+    for (let i = 0; i < n; i += 2) {
+      const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+      x.beginPath(); x.moveTo(cx, cy);
+      x.lineTo(cx + Math.cos(a0) * 2000, cy + Math.sin(a0) * 2000);
+      x.lineTo(cx + Math.cos(a1) * 2000, cy + Math.sin(a1) * 2000);
+      x.closePath(); x.fill();
+    }
+    [[90, 260, 14, PINK], [985, 70, 12, PINK], [55, 1180, 10, TEAL], [1020, 1250, 12, "#fff"], [60, 70, 9, "#fff"]]
+      .forEach(([X, Y, r, col]) => { x.fillStyle = col; x.beginPath(); x.arc(X, Y, r, 0, Math.PI * 2); x.fill(); });
+
+    // Marca
+    x.textAlign = "center"; x.textBaseline = "alphabetic";
+    x.font = '92px "Archivo Black", "Arial Black", sans-serif';
+    x.fillStyle = INK; x.fillText("MERCADINHO", cx + 6, 138);
+    x.fillStyle = PINK; x.fillText("MERCADINHO", cx, 132);
+    x.font = '76px "Playball", "Brush Script MT", cursive';
+    x.fillStyle = "#fff"; x.fillText("do Olympia", cx + 4, 222);
+    x.fillStyle = TEAL; x.fillText("do Olympia", cx, 218);
+
+    // Cartão branco
+    const px = 70, py = 270, pw = W - 140, ph = 880;
+    x.save();
+    x.shadowColor = "rgba(16, 50, 74, 0.18)"; x.shadowBlur = 30; x.shadowOffsetY = 8;
+    x.fillStyle = "#fff"; rrect(x, px, py, pw, ph, 44); x.fill();
+    x.restore();
+
+    // Medidas do texto: nome, descrição e opções
+    const tw = pw - 100;
+    x.font = '600 50px "Poppins", system-ui, sans-serif';
+    const nameLines = wrapLines(x, d.name, tw, 2);
+    x.font = '400 34px "Poppins", system-ui, sans-serif';
+    const sizeLines = wrapLines(x, d.size, tw, 2);
+    x.font = '500 30px "Poppins", system-ui, sans-serif';
+    const optRows = [];
+    if (d.options.length) {
+      let row = [], rowW = 0;
+      d.options.forEach(o => {
+        const w = 28 + 16 + x.measureText(o.label).width;
+        if (row.length && rowW + 30 + w > tw) { optRows.push({ row, w: rowW }); row = []; rowW = 0; }
+        rowW += (row.length ? 30 : 0) + w; row.push({ o, w });
+      });
+      if (row.length) optRows.push({ row, w: rowW });
+    }
+    const nameLH = 62, sizeLH = 46, optLH = 48;
+    const blockH = nameLines.length * nameLH + 12 + sizeLines.length * sizeLH + (optRows.length ? 22 + optRows.length * optLH : 0);
+
+    // Linha acima do preço ("de R$ X" riscado, ou "Leve 3, pague 2")
+    const topLine = drop || ci;
+    const areaBottom = py + ph - 80 - (topLine ? 62 : 0);
+
+    // Foto (contida na área, sem cortar); encolhe quando o texto precisa de mais espaço
+    const bx = px + 60, by = py + 36, bw = pw - 120;
+    const bh = Math.max(240, Math.min(420, areaBottom - blockH - 30 - by));
+    if (img && img.naturalWidth) {
+      const s = Math.min(bw / img.naturalWidth, bh / img.naturalHeight);
+      const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
+      x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+      x.drawImage(img, bx + (bw - dw) / 2, by + (bh - dh) / 2, dw, dh);
+    }
+
+    const areaTop = by + bh + 20;
+    let y = areaTop + Math.max(0, (areaBottom - areaTop - blockH) / 2);
+    x.textAlign = "center"; x.textBaseline = "top";
+    x.fillStyle = INK; x.font = '600 50px "Poppins", system-ui, sans-serif';
+    nameLines.forEach(l => { x.fillText(l, cx, y); y += nameLH; });
+    y += 12;
+    x.fillStyle = MUTED; x.font = '400 34px "Poppins", system-ui, sans-serif';
+    sizeLines.forEach(l => { x.fillText(l, cx, y); y += sizeLH; });
+    if (optRows.length) {
+      y += 22;
+      x.font = '500 30px "Poppins", system-ui, sans-serif'; x.textAlign = "left"; x.textBaseline = "middle";
+      optRows.forEach(({ row, w }) => {
+        let ox = cx - w / 2; const oy = y + optLH / 2 - 4;
+        row.forEach(({ o, w: iw }, i) => {
+          if (i) ox += 30;
+          x.fillStyle = o.color; x.beginPath(); x.arc(ox + 14, oy, 14, 0, Math.PI * 2); x.fill();
+          x.lineWidth = 2; x.strokeStyle = "rgba(16, 50, 74, 0.25)"; x.stroke();
+          if (o.key === d.selectedKey) { x.lineWidth = 3; x.strokeStyle = PINK; x.beginPath(); x.arc(ox + 14, oy, 19, 0, Math.PI * 2); x.stroke(); }
+          x.fillStyle = INK; x.fillText(o.label, ox + 44, oy + 2);
+          ox += iw;
+        });
+        y += optLH;
+      });
+    }
+
+    // Preço: pílula rosa sobre a borda de baixo do cartão
+    const price = brl(ci ? ci.total : d.price);
+    x.font = '84px "Archivo Black", "Arial Black", sans-serif'; x.textAlign = "center"; x.textBaseline = "middle";
+    const prW = x.measureText(price).width + 110, prH = 136, prX = cx - prW / 2, prY = py + ph - prH / 2 - 10;
+    x.fillStyle = INK; rrect(x, prX + 8, prY + 8, prW, prH, prH / 2); x.fill();
+    x.fillStyle = PINK; rrect(x, prX, prY, prW, prH, prH / 2); x.fill();
+    x.fillStyle = "#fff"; x.fillText(price, cx, prY + prH / 2 + 4);
+
+    if (topLine) {
+      const ly = prY - 40;
+      if (drop) {
+        x.font = '500 42px "Poppins", system-ui, sans-serif';
+        const pre = "de ", old = brl(d.oldPrice);
+        const w1 = x.measureText(pre).width, w2 = x.measureText(old).width, sx = cx - (w1 + w2) / 2;
+        x.textAlign = "left"; x.fillStyle = MUTED;
+        x.fillText(pre, sx, ly); x.fillText(old, sx + w1, ly);
+        x.strokeStyle = PINK; x.lineWidth = 5; x.beginPath();
+        x.moveTo(sx + w1 - 6, ly + 2); x.lineTo(sx + w1 + w2 + 6, ly + 2); x.stroke();
+      } else {
+        x.font = '600 44px "Poppins", system-ui, sans-serif'; x.textAlign = "center"; x.fillStyle = INK;
+        x.fillText(ci.label, cx, ly);
+      }
+    }
+
+    // Selo do tipo no canto do cartão
+    const badge = { baixou: ["PREÇO BAIXOU!", INK, SUN], novidade: ["NOVIDADE", TEAL, "#fff"], combo: ["COMBO", PINK, "#fff"] }[d.mode];
+    if (badge && (d.mode !== "baixou" || drop) && (d.mode !== "combo" || ci)) {
+      const [label, bg, fg] = badge;
+      x.font = '44px "Archivo Black", "Arial Black", sans-serif';
+      const bw2 = x.measureText(label).width + 64, bh2 = 84;
+      x.save();
+      x.translate(px + pw - bw2 / 2 + 24, py + 6);
+      x.rotate(0.1);
+      x.fillStyle = "rgba(16, 50, 74, 0.25)"; rrect(x, -bw2 / 2 + 6, -bh2 / 2 + 6, bw2, bh2, 18); x.fill();
+      x.fillStyle = bg; rrect(x, -bw2 / 2, -bh2 / 2, bw2, bh2, 18); x.fill();
+      x.fillStyle = fg; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(label, 0, 3);
+      x.restore();
+    }
+
+    // Chamada
+    x.font = '500 38px "Poppins", system-ui, sans-serif'; x.textAlign = "center"; x.textBaseline = "middle";
+    const cta = "Peça pelo WhatsApp";
+    const ctW = x.measureText(cta).width + 90, ctH = 84, ctX = cx - ctW / 2, ctY = H - ctH - 56;
+    x.fillStyle = PINK; rrect(x, ctX + 6, ctY + 6, ctW, ctH, ctH / 2); x.fill();
+    x.fillStyle = INK; rrect(x, ctX, ctY, ctW, ctH, ctH / 2); x.fill();
+    x.fillStyle = "#fff"; x.fillText(cta, cx, ctY + ctH / 2 + 2);
+
+    return c;
+  }
+
+  function toFile(canvas, name) {
+    const [head, b64] = canvas.toDataURL("image/jpeg", 0.9).split(",");
+    const bin = atob(b64), arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new File([arr], name + ".jpg", { type: head.match(/:(.*?);/)[1] });
+  }
+
+  function download(canvas, name) {
+    const file = toFile(canvas, name);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(file); a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  // Celular: folha de compartilhar com imagem + legenda. Computador: baixa o cartaz e abre o WhatsApp com o texto.
+  async function share(canvas, d, text) {
+    const file = toFile(canvas, d.fileName);
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], text }); }
+      catch (e) { if (e.name !== "AbortError") throw e; }
+      return;
+    }
+    download(canvas, d.fileName);
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+    toast("Cartaz baixado. Escolha o grupo e anexe a imagem.");
+  }
+
+  let toastEl, toastTimer;
+  function toast(msg) {
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.setAttribute("role", "status");
+      toastEl.style.cssText = "position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:20;background:#10324a;color:#fff;" +
+        "padding:10px 16px;border-radius:999px;font:500 0.875rem Poppins,system-ui,sans-serif;box-shadow:0 4px 16px rgba(16,50,74,.25);" +
+        "max-width:calc(100% - 32px);text-align:center";
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg; toastEl.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastEl.hidden = true; }, 4000);
+  }
+
+  window.Cartaz = { SITE, brl, fontsReady, base, comboInfo, caption, draw, share, download, toast };
+})();
+</script>
+<script>
+const $ = id => document.getElementById(id);
+const brl = Cartaz.brl;
+const norm = t => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const num = s => {
+  let t = String(s).replace(/[\sR$]/g, "");
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", "."); // 1.234,56 ou 27,5
+  const v = parseFloat(t); return Number.isFinite(v) ? v : null;
+};
+const int = s => { const v = parseInt(String(s), 10); return Number.isFinite(v) ? v : null; };
+
+let PRODUCTS = [];
+let WHATSAPP = "";
+const offSite = p => !!(p.hidden || p.soldOut);
+const state = { p: null, variant: null, mode: "normal", comboTipo: "pague" };
+let current = { d: null, canvas: null };
+let drawToken = 0;
+const photo = new Image();
+
+// Lê o ALL_PRODUCTS direto do index.html publicado: é a mesma fonte de nome, preço, opções e fotos do site.
+async function loadProducts() {
+  try {
+    const html = await (await fetch("index.html", { cache: "no-cache" })).text();
+    const i = html.indexOf("const ALL_PRODUCTS");
+    const s = html.indexOf("[", i), e = html.indexOf("\n];", s);
+    if (i < 0 || s < 0 || e < 0) throw new Error("lista não encontrada");
+    const all = new Function(`return ${html.slice(s, e + 2)}`)();
+    const wa = html.match(/const WHATSAPP = "(\d*)"/);
+    WHATSAPP = wa ? wa[1] : "";
+    // Todos os produtos entram: sem estoque fixo, "escondido" ou "esgotado" no site não impede divulgar.
+    PRODUCTS = [...all.filter(p => !p.hidden), ...all.filter(p => p.hidden)];
+    $("loading").hidden = true;
+    renderList();
+    openFromHash();
+  } catch (err) {
+    $("loading").textContent = "Não consegui ler os produtos do index.html.";
+    $("loading").classList.add("err");
+  }
+}
+
+function renderList() {
+  const ul = $("plist"); ul.innerHTML = "";
+  PRODUCTS.forEach(p => {
+    const li = document.createElement("li");
+    li.dataset.search = norm([p.name, p.size, ...(p.variants || []).map(v => v.label)].join(" "));
+    const b = document.createElement("button"); b.type = "button";
+    const img = document.createElement("img"); img.alt = ""; img.src = p.variants ? p.variants[0].img : p.img;
+    const mid = document.createElement("div");
+    const n = document.createElement("p"); n.className = "pname"; n.textContent = p.name;
+    const s = document.createElement("p"); s.className = "psize";
+    s.textContent = p.size + (p.variants ? ` · ${p.variants.length} opções` : "") + (p.hidden ? " · fora do site" : p.soldOut ? " · esgotado no site" : "");
+    mid.append(n, s);
+    const pr = document.createElement("span"); pr.className = "pprice"; pr.textContent = brl(p.price);
+    b.append(img, mid, pr);
+    b.addEventListener("click", () => openEditor(p));
+    li.appendChild(b); ul.appendChild(li);
+  });
+}
+
+$("busca").addEventListener("input", () => {
+  const terms = norm($("busca").value).split(/\s+/).filter(Boolean);
+  $("plist").querySelectorAll("li").forEach(li => { li.hidden = !terms.every(t => li.dataset.search.includes(t)); });
+});
+
+function openEditor(p, variantKey) {
+  state.p = p;
+  state.variant = p.variants ? (variantKey || p.variants[0].key) : null;
+  state.mode = "normal";
+  $("oldPrice").value = "";
+  $("leve").value = "3"; $("pague").value = "2"; $("total").value = "";
+  setComboTipo("pague", false);
+  $("eName").textContent = p.name;
+  $("eSize").textContent = `${p.size} · ${brl(p.price)} no site`;
+  $("dropHint").textContent = `Preço atual no site: ${brl(p.price)}`;
+  $("offNote").hidden = !offSite(p);
+  $("offNote").textContent = `${p.hidden ? "Esse produto está fora do site" : "Esse produto está marcado como esgotado no site"}, então o texto leva direto para o seu WhatsApp em vez do site.`;
+
+  const chips = $("chips"); chips.innerHTML = "";
+  $("optGroup").hidden = !p.variants;
+  (p.variants || []).forEach(o => {
+    const c = document.createElement("button");
+    c.type = "button"; c.className = "chip"; c.style.background = o.color; c.title = o.label; c.setAttribute("aria-label", o.label);
+    c.addEventListener("click", () => { state.variant = o.key; update(); });
+    c.dataset.key = o.key; chips.appendChild(c);
+  });
+  setMode("normal", false);
+  $("picker").hidden = true; $("editor").hidden = false;
+  history.replaceState(null, "", "#" + p.id);
+  window.scrollTo(0, 0);
+  update();
+}
+
+$("back").addEventListener("click", () => {
+  $("editor").hidden = true; $("picker").hidden = false;
+  history.replaceState(null, "", location.pathname);
+});
+
+function setMode(mode, redraw = true) {
+  state.mode = mode;
+  $("modes").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+  $("dropGroup").hidden = mode !== "baixou";
+  $("comboGroup").hidden = mode !== "combo";
+  if (redraw) update();
+}
+$("modes").querySelectorAll("button").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+function setComboTipo(tipo, redraw = true) {
+  state.comboTipo = tipo;
+  $("comboTipo").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tipo === tipo)));
+  $("pagueField").hidden = tipo !== "pague";
+  $("totalField").hidden = tipo !== "por";
+  if (tipo === "por" && !$("total").value && state.p) {
+    const leve = int($("leve").value) || 3;
+    $("total").value = (Math.floor(state.p.price * leve) - 1).toFixed(2).replace(".", ",");
+  }
+  if (redraw) update();
+}
+$("comboTipo").querySelectorAll("button").forEach(b => b.addEventListener("click", () => setComboTipo(b.dataset.tipo)));
+["oldPrice", "leve", "pague", "total"].forEach(id => $(id).addEventListener("input", () => update()));
+
+function buildData() {
+  const p = state.p;
+  const d = Cartaz.base(p, state.variant);
+  if (offSite(p) && WHATSAPP) d.link = `https://wa.me/${WHATSAPP}`;
+  d.mode = state.mode;
+  d.oldPrice = num($("oldPrice").value);
+  d.combo = { leve: int($("leve").value), tipo: state.comboTipo, pague: int($("pague").value), total: num($("total").value) };
+  return d;
+}
+
+async function update() {
+  const p = state.p; if (!p) return;
+  const token = ++drawToken;
+  const d = buildData();
+
+  // Opção em destaque
+  $("chips").querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.key === state.variant)));
+  if (p.variants) $("chosen").textContent = p.variants.find(o => o.key === state.variant).label;
+
+  // Avisos
+  $("dropWarn").hidden = !(d.mode === "baixou" && !(d.oldPrice > d.price));
+  const ci = Cartaz.comboInfo(d);
+  if (d.mode === "combo") {
+    let warn = "";
+    if (!(d.combo.leve >= 2)) warn = "Leve precisa ser 2 ou mais.";
+    else if (d.combo.tipo === "pague" && !(d.combo.pague >= 1 && d.combo.pague < d.combo.leve)) warn = "Pague precisa ser menor que Leve.";
+    else if (d.combo.tipo === "por" && !(d.combo.total > 0)) warn = "Informe o valor do combo.";
+    else if (ci && ci.saving <= 0.004) warn = `Sem desconto: ${d.combo.leve} unidades já custam ${brl(d.price * d.combo.leve)} no site.`;
+    $("comboWarn").textContent = warn; $("comboWarn").hidden = !warn;
+    $("comboHint").textContent = ci ? `Total ${brl(ci.total)} · sai ${brl(ci.each)} cada` + (ci.saving > 0.004 ? ` · economia de ${brl(ci.saving)}` : "") : "";
+  }
+
+  $("texto").value = Cartaz.caption(d);
+
+  // Cartaz
+  if (photo.dataset.src !== d.imgSrc) { photo.src = d.imgSrc; photo.dataset.src = d.imgSrc; }
+  await Promise.all([Cartaz.fontsReady, photo.decode().catch(() => {})]);
+  if (token !== drawToken) return;
+  const canvas = Cartaz.draw(d, photo);
+  $("preview").getContext("2d").drawImage(canvas, 0, 0);
+  current = { d, canvas };
+}
+
+// Compartilhar usa o cartaz já desenhado na prévia, para chamar a folha do celular logo no toque.
+$("share").addEventListener("click", async () => {
+  if (!current.canvas) return;
+  $("share").disabled = true;
+  try { await Cartaz.share(current.canvas, current.d, $("texto").value); }
+  catch { Cartaz.toast("Não foi possível compartilhar."); }
+  finally { $("share").disabled = false; }
+});
+$("dl").addEventListener("click", () => { if (current.canvas) Cartaz.download(current.canvas, current.d.fileName); });
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("texto").value); Cartaz.toast("Texto copiado."); }
+  catch { Cartaz.toast("Não foi possível copiar."); }
+});
+
+// divulgar.html#omo ou #vejaperf-lavanda abre direto no produto.
+function openFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1)); if (!h) return;
+  const p = PRODUCTS.find(q => q.id === h || (q.variants && q.variants.some(o => `${q.id}-${o.key}` === h)));
+  if (p) openEditor(p, p.variants && h !== p.id ? h.slice(p.id.length + 1) : null);
+}
+
+window.addEventListener("hashchange", openFromHash);
+loadProducts();
+</script>
+</body>
+</html>
