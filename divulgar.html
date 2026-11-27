@@ -45,6 +45,21 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .psize { color: var(--muted); font-size: 0.8125rem; margin: 2px 0 0; }
 .pprice { font-family: var(--display); font-size: 1.0625rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .msg { color: var(--muted); text-align: center; margin: 24px 0; }
+.frow { display: flex; gap: 8px; margin-top: 10px; }
+.frow.scroll { overflow-x: auto; scrollbar-width: none; margin-right: -16px; padding-right: 16px; }
+.frow.scroll::-webkit-scrollbar { display: none; }
+.frow button {
+  flex: none; border: 1px solid rgba(16, 50, 74, 0.2); background: #fff; color: var(--ink); border-radius: 999px;
+  padding: 7px 12px; font: 500 0.8125rem var(--body); cursor: pointer; white-space: nowrap;
+}
+.frow button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.frow .n { opacity: 0.6; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
+.tag { font-size: 0.6875rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.tag-drop { background: #fde2e8; color: #b3264a; }
+.tag-new { background: #d9f0f6; color: var(--teal); }
+.pprice { text-align: right; }
+.pprice s { display: block; font: 400 0.75rem var(--body); color: var(--muted); }
 .msg.err { color: #b3264a; }
 
 #editor[hidden], #picker[hidden], [hidden] { display: none !important; }
@@ -90,8 +105,15 @@ textarea { min-height: 190px; resize: vertical; font-size: 0.875rem; line-height
     <div class="search">
       <label for="busca" class="sr">Buscar produto</label>
       <input id="busca" type="search" placeholder="Buscar produto" autocomplete="off">
+      <div class="frow" id="fTipo" role="group" aria-label="Mostrar">
+        <button type="button" data-f="todos" aria-pressed="true">Todos</button>
+        <button type="button" data-f="baixou" aria-pressed="false">Preço baixou<span class="n" id="nBaixou"></span></button>
+        <button type="button" data-f="novidade" aria-pressed="false">Novidades<span class="n" id="nNovidade"></span></button>
+      </div>
+      <div class="frow scroll" id="fSetor" role="group" aria-label="Setor"></div>
     </div>
     <p class="msg" id="loading">Carregando produtos…</p>
+    <p class="msg" id="empty" hidden>Nenhum produto com esses filtros.</p>
     <ul class="plist" id="plist"></ul>
   </section>
 
@@ -452,6 +474,29 @@ const int = s => { const v = parseInt(String(s), 10); return Number.isFinite(v) 
 let PRODUCTS = [];
 let WHATSAPP = "";
 const offSite = p => !!(p.hidden || p.soldOut);
+const dropped = p => p.before > p.price; // "before" e "isNew" vêm do index.html
+const isNew = p => !!p.isNew;
+
+// Setor: usa "setor" do produto no index.html, se existir; senão deduz pelo nome e descrição.
+const SETORES = [
+  ["limpeza", "Limpeza"], ["lavanderia", "Lavanderia"], ["cozinha", "Cozinha"], ["pessoais", "Cuidados pessoais"],
+  ["banheiro", "Banheiro"], ["insetos", "Contra insetos"], ["outros", "Outros"],
+];
+const SETOR_REGRAS = [ // a ordem importa: a primeira que casar vence
+  ["insetos", /inseticida|repelente|raid|baygon|\bsbp\b|mosquit|barata|formiga/],
+  ["pessoais", /antitranspirante|desodorante|shampoo|xampu|condicionador|sabonete|enxaguante|bucal|creme dental|escova de dente|fio dental|hidratante|locao|absorvente|fralda|barbear|protetor solar/],
+  ["banheiro", /papel higienico|sanitari|desodorizador|pato purific/],
+  ["lavanderia", /lava-roupas|lava roupas|lavagem|amaciante|vanish|tira.?manchas|alvejante|\bomo\b/],
+  ["cozinha", /detergente|esponja|\bpano\b|papel toalha|aluminio|filme pvc|palha de aco|bombril|lava-loucas|lava loucas|saco de lixo/],
+  ["limpeza", /multiuso|limpador|sapolio|desinfetante|agua sanitaria|cloro|lustra|desumidificador|mofo|limpa/],
+];
+function setorDe(p) {
+  if (p.setor) return p.setor;
+  const t = norm(`${p.name} ${p.size}`);
+  const hit = SETOR_REGRAS.find(([, re]) => re.test(t));
+  return hit ? hit[0] : "outros";
+}
+const filt = { tipos: new Set(), setor: "todos" };
 const state = { p: null, variant: null, mode: "normal", comboTipo: "pague" };
 let current = { d: null, canvas: null };
 let drawToken = 0;
@@ -490,28 +535,77 @@ function renderList() {
     const s = document.createElement("p"); s.className = "psize";
     s.textContent = p.size + (p.variants ? ` · ${p.variants.length} opções` : "") + (p.hidden ? " · fora do site" : p.soldOut ? " · esgotado no site" : "");
     mid.append(n, s);
-    const pr = document.createElement("span"); pr.className = "pprice"; pr.textContent = brl(p.price);
+    if (dropped(p) || isNew(p)) {
+      const tags = document.createElement("p"); tags.className = "tags";
+      tags.innerHTML = (dropped(p) ? '<span class="tag tag-drop">Preço baixou</span>' : "") + (isNew(p) ? '<span class="tag tag-new">Novidade</span>' : "");
+      mid.appendChild(tags);
+    }
+    const pr = document.createElement("span"); pr.className = "pprice";
+    if (dropped(p)) { const was = document.createElement("s"); was.textContent = brl(p.before); pr.appendChild(was); }
+    pr.append(brl(p.price));
     b.append(img, mid, pr);
     b.addEventListener("click", () => openEditor(p));
     li.appendChild(b); ul.appendChild(li);
+    li._p = p;
+  });
+  renderFilters();
+  applyFilters();
+}
+
+function renderFilters() {
+  $("nBaixou").textContent = PRODUCTS.filter(dropped).length;
+  $("nNovidade").textContent = PRODUCTS.filter(isNew).length;
+  const count = k => PRODUCTS.filter(p => setorDe(p) === k).length;
+  const box = $("fSetor"); box.innerHTML = "";
+  [["todos", "Todos os setores"], ...SETORES.filter(([k]) => count(k) > 0)].forEach(([k, label]) => {
+    const b = document.createElement("button"); b.type = "button"; b.dataset.setor = k;
+    b.setAttribute("aria-pressed", String(filt.setor === k));
+    b.textContent = label;
+    if (k !== "todos") { const n = document.createElement("span"); n.className = "n"; n.textContent = count(k); b.appendChild(n); }
+    b.addEventListener("click", () => { filt.setor = k; syncFilterButtons(); applyFilters(); });
+    box.appendChild(b);
   });
 }
 
-$("busca").addEventListener("input", () => {
+// "Todos" limpa os outros; "Preço baixou" e "Novidades" se combinam (mostra quem tiver qualquer um dos dois).
+$("fTipo").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+  const f = b.dataset.f;
+  if (f === "todos") filt.tipos.clear();
+  else if (filt.tipos.has(f)) filt.tipos.delete(f); else filt.tipos.add(f);
+  syncFilterButtons(); applyFilters();
+}));
+
+function syncFilterButtons() {
+  $("fTipo").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed",
+    String(b.dataset.f === "todos" ? filt.tipos.size === 0 : filt.tipos.has(b.dataset.f))));
+  $("fSetor").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.setor === filt.setor)));
+}
+
+function applyFilters() {
   const terms = norm($("busca").value).split(/\s+/).filter(Boolean);
-  $("plist").querySelectorAll("li").forEach(li => { li.hidden = !terms.every(t => li.dataset.search.includes(t)); });
-});
+  let shown = 0;
+  $("plist").querySelectorAll("li").forEach(li => {
+    const p = li._p;
+    const okTipo = !filt.tipos.size || (filt.tipos.has("baixou") && dropped(p)) || (filt.tipos.has("novidade") && isNew(p));
+    const okSetor = filt.setor === "todos" || setorDe(p) === filt.setor;
+    const ok = okTipo && okSetor && terms.every(t => li.dataset.search.includes(t));
+    li.hidden = !ok; if (ok) shown++;
+  });
+  $("empty").hidden = shown > 0 || !PRODUCTS.length;
+}
+
+$("busca").addEventListener("input", applyFilters);
 
 function openEditor(p, variantKey) {
   state.p = p;
   state.variant = p.variants ? (variantKey || p.variants[0].key) : null;
   state.mode = "normal";
-  $("oldPrice").value = "";
+  $("oldPrice").value = dropped(p) ? p.before.toFixed(2).replace(".", ",") : "";
   $("leve").value = "3"; $("pague").value = "2"; $("total").value = "";
   setComboTipo("pague", false);
   $("eName").textContent = p.name;
   $("eSize").textContent = `${p.size} · ${brl(p.price)} no site`;
-  $("dropHint").textContent = `Preço atual no site: ${brl(p.price)}`;
+  $("dropHint").textContent = `Preço atual no site: ${brl(p.price)}` + (dropped(p) ? ` · antes ${brl(p.before)}` : "");
   $("offNote").hidden = !offSite(p);
   $("offNote").textContent = `${p.hidden ? "Esse produto está fora do site" : "Esse produto está marcado como esgotado no site"}, então o texto leva direto para o seu WhatsApp em vez do site.`;
 
@@ -523,7 +617,11 @@ function openEditor(p, variantKey) {
     c.addEventListener("click", () => { state.variant = o.key; update(); });
     c.dataset.key = o.key; chips.appendChild(c);
   });
-  setMode("normal", false);
+  const want = filt.tipos;
+  let mode = "normal";
+  if (dropped(p) && (!want.size || want.has("baixou"))) mode = "baixou";
+  else if (isNew(p) && (!want.size || want.has("novidade"))) mode = "novidade";
+  setMode(mode, false);
   $("picker").hidden = true; $("editor").hidden = false;
   history.replaceState(null, "", "#" + p.id);
   window.scrollTo(0, 0);
